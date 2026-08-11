@@ -142,6 +142,21 @@ class AscendantEngine:
     Coordinates the 25-stage continuous developmental flywheel.
     """
     def __init__(self, data_dir: str = "data"):
+        # Auto-load .env if present
+        for env_file in [Path(".env"), Path(__file__).parent.parent / ".env", Path.home() / ".env"]:
+            if env_file.exists():
+                try:
+                    with open(env_file, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line and not line.startswith("#") and "=" in line:
+                                k, v = line.split("=", 1)
+                                k, v = k.strip(), v.strip().strip("'").strip('"')
+                                if k and not os.environ.get(k):
+                                    os.environ[k] = v
+                except Exception:
+                    pass
+
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
