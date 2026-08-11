@@ -110,6 +110,7 @@ from zerion.integration.offline_fallback import OfflineFallbackManager
 from zerion.entity.state import CognitiveEntityStateStore, EntityLifecycleState
 from zerion.self_model.self_predictor import SelfPredictor
 from zerion.architecture.autophagy import CognitiveAutophagyEngine
+from zerion.intelligence_forge.organism_runtime.foundry import IntelligenceFoundry, FoundryCycleTelemetry
 
 
 @dataclass
@@ -223,8 +224,9 @@ class AscendantEngine:
         self.ui_bridge = UIStateBridge()
         self.voice_pipeline = VoiceFirstInteractionPipeline(engine_ref=self, ui_bridge=self.ui_bridge)
 
-        # 13. Cognitive OS & Autonomous Organism
+        # 13. Cognitive OS & Autonomous Organism & Intelligence Foundry
         self.organism = CognitiveOrganism(data_dir=str(self.data_dir))
+        self.foundry = IntelligenceFoundry(data_dir=str(self.data_dir))
         self.timeline = DevelopmentTimelineManager(db_path=str(self.data_dir / "timeline.db"))
         self.continuous_objectives = self.organism.objectives
         self.mobile_governor = MobileResourceGovernor()
@@ -434,7 +436,14 @@ class AscendantEngine:
         ))
         self.memory.trigger_distillation()
 
-        # 12. COGNITIVE AUTOPOIESIS & ORGANISM COORDINATION
+        # 12. INTELLIGENCE FOUNDRY CYCLE & COGNITIVE AUTOPOIESIS
+        foundry_res = await self.foundry.execute_foundry_cycle(
+            signal_source=target_domain,
+            signal_description=target_q.text,
+            importance=0.75,
+            uncertainty=0.60
+        )
+
         org_result = await self.organism.execute_organism_cycle(
             engine_context={
                 "resource_metrics": {"cpu_percent": snap.cpu_percent, "memory_mb": snap.memory_available_mb},

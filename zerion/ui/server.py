@@ -110,9 +110,14 @@ class GenesisWebServer:
                     "genome_version": self.engine.genome_manager.current_genome.version,
                     "active_objectives": len(self.engine.continuous_objectives.list_active_objectives()),
                     "active_strategies": len(self.engine.strategy_registry.list_strategies()),
-                    "total_capabilities": len(self.engine.self_model._capabilities)
+                    "total_capabilities": len(self.engine.self_model._capabilities),
+                    "active_episodes": len(self.engine.foundry.episode_store._episodes)
                 }
                 self._send_response(writer, 200, "application/json", json.dumps(res).encode("utf-8"))
+
+            elif method == "GET" and path == "/api/episodes":
+                eps = [e.to_dict() for e in self.engine.foundry.episode_store.list_episodes()]
+                self._send_response(writer, 200, "application/json", json.dumps(eps).encode("utf-8"))
 
             elif method == "GET" and path == "/api/objectives":
                 objs = [o.to_dict() for o in self.engine.continuous_objectives.list_active_objectives()]
