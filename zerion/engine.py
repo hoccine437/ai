@@ -107,6 +107,9 @@ from zerion.runtime.daemon import AutonomyLevel, DevelopmentDaemon, BackgroundDi
 from zerion.integration.android.mobile_runtime import MobileResourceGovernor
 from zerion.integration.termux_adapter import TermuxAdapter
 from zerion.integration.offline_fallback import OfflineFallbackManager
+from zerion.entity.state import CognitiveEntityStateStore, EntityLifecycleState
+from zerion.self_model.self_predictor import SelfPredictor
+from zerion.architecture.autophagy import CognitiveAutophagyEngine
 
 
 @dataclass
@@ -147,8 +150,11 @@ class AscendantEngine:
         self.scheduler = MissionScheduler()
         self.telemetry = CognitiveTelemetryLogger(log_path=str(self.data_dir / "telemetry.jsonl"))
 
-        # 2. Identity Core & Invariants
+        # 2. Identity Core & Invariants & Entity State
         self.identity = IdentityCore(storage_path=str(self.data_dir / "identity.json"))
+        self.entity_state = CognitiveEntityStateStore(db_path=str(self.data_dir / "entity_state.db"))
+        self.self_predictor = SelfPredictor()
+        self.autophagy = CognitiveAutophagyEngine(db_path=str(self.data_dir / "autophagy.db"))
 
         # 3. World Model 3.0 & Counterfactuals & Unknown Space
         self.world = WorldModel(db_path=str(self.data_dir / "world_model.db"))
@@ -353,12 +359,18 @@ class AscendantEngine:
             is_offline=self.offline.is_offline
         )
 
-        # 7. META-PREDICTION FORECAST
+        # 7. META-PREDICTION & SELF-PREDICTOR FORECAST
         pre_pred = self.meta_prediction.generate_pre_prediction(
             task_id=cycle_id,
             task_domain=selected_strategy.domain,
             uncertainty=0.6,
             difficulty=0.5
+        )
+        self_pred = self.self_predictor.predict_task_execution(
+            task_id=cycle_id,
+            task_domain=selected_strategy.domain,
+            task_difficulty=0.5,
+            historical_strategy_reliability=selected_strategy.reliability
         )
 
         # 8. COUNTERFACTUAL SIMULATION
@@ -399,6 +411,18 @@ class AscendantEngine:
             actual_strategy=selected_strategy.name,
             actual_success=prog_res.get("completed", False) and not attack_res.broken,
             actual_latency_ms=prog_res.get("total_duration_ms", 10.0)
+        )
+        self.self_predictor.record_actual_outcome(
+            prediction=self_pred,
+            actual_strategy=selected_strategy.name,
+            actual_success=prog_res.get("completed", False) and not attack_res.broken,
+            actual_latency_ms=prog_res.get("total_duration_ms", 10.0)
+        )
+        self.entity_state.capture_snapshot(
+            objectives_count=len(active_objs),
+            strategies_count=len(self.strategy_registry.list_strategies()),
+            capabilities_count=len(self.self_model._capabilities),
+            episodes_count=len(self.memory._episodes)
         )
 
         self.memory.record_episode(Episode(
