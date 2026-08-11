@@ -97,6 +97,11 @@ from zerion.benchmarks.runner import BenchmarkRunner
 from zerion.benchmarks.scoreboard import DevelopmentalScoreboard
 from zerion.benchmarks.anti_gaming import AntiGamingDetector
 from zerion.ui.state_bridge import UIStateBridge
+from zerion.cognitive_os.organism import CognitiveOrganism, OrganismCycleResult
+from zerion.cognitive_os.objective_manager import ObjectiveContinuityManager
+from zerion.evolution.timeline import DevelopmentTimelineManager, DevelopmentSnapshot
+from zerion.runtime.daemon import AutonomyLevel, DevelopmentDaemon, BackgroundDiscoveryDaemon
+from zerion.integration.android.mobile_runtime import MobileResourceGovernor
 from zerion.integration.termux_adapter import TermuxAdapter
 from zerion.integration.offline_fallback import OfflineFallbackManager
 
@@ -206,7 +211,15 @@ class AscendantEngine:
         self.anti_gaming = AntiGamingDetector()
         self.ui_bridge = UIStateBridge()
 
-        # 13. Integration & Fallbacks
+        # 13. Cognitive OS & Autonomous Organism
+        self.organism = CognitiveOrganism(data_dir=str(self.data_dir))
+        self.timeline = DevelopmentTimelineManager(db_path=str(self.data_dir / "timeline.db"))
+        self.continuous_objectives = self.organism.objectives
+        self.mobile_governor = MobileResourceGovernor()
+        self.daemon = DevelopmentDaemon(engine_ref=self, autonomy_level=AutonomyLevel.AUTONOMOUS_SAFE)
+        self.discovery_daemon = BackgroundDiscoveryDaemon(engine_ref=self)
+
+        # 14. Integration & Fallbacks
         self.termux = TermuxAdapter()
         self.offline = OfflineFallbackManager(model_fabric=self.model_fabric)
 
@@ -390,7 +403,14 @@ class AscendantEngine:
         ))
         self.memory.trigger_distillation()
 
-        # 12. COGNITIVE AUTOPOIESIS CHECK
+        # 12. COGNITIVE AUTOPOIESIS & ORGANISM COORDINATION
+        org_result = await self.organism.execute_organism_cycle(
+            engine_context={
+                "resource_metrics": {"cpu_percent": snap.cpu_percent, "memory_mb": snap.memory_available_mb},
+                "pressure_signals": signals
+            }
+        )
+
         autopoiesis_run = False
         if attack_res.broken or not prog_res.get("completed"):
             auto_rep = await self.autopoiesis.execute_autopoietic_reflection(
@@ -399,7 +419,8 @@ class AscendantEngine:
             )
             autopoiesis_run = True
 
-        # 13. RECORD TELEMETRY & SECOND-ORDER LEARNING ACCELERATION
+        # 13. RECORD TELEMETRY, TIMELINE SNAPSHOT & LEARNING ACCELERATION
+        self.timeline.capture_snapshot(self, metadata={"cycle_id": cycle_id})
         self.telemetry.record(CognitiveTelemetryRecord(
             goal_id=target_q.id,
             program_id=program.program_id,

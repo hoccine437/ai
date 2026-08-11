@@ -9,6 +9,7 @@ from zerion.evolution.self_modification import (
     ControlledSelfModificationEngine,
 )
 from zerion.evolution.ascension import AscensionCycleReport, AscensionEngine
+from zerion.evolution.timeline import DevelopmentSnapshot, DevelopmentTimelineManager
 
 __all__ = [
     "PlasticityConfig",
@@ -18,4 +19,6 @@ __all__ = [
     "ControlledSelfModificationEngine",
     "AscensionCycleReport",
     "AscensionEngine",
+    "DevelopmentSnapshot",
+    "DevelopmentTimelineManager",
 ]

@@ -9,6 +9,7 @@ from zerion.runtime.resources import ResourceManager, ResourceSnapshot
 from zerion.runtime.security import SecurityBoundary, PermissionLevel, AuditEntry
 from zerion.runtime.watchdog import Watchdog
 from zerion.runtime.scheduler import MissionScheduler
+from zerion.runtime.daemon import AutonomyLevel, DevelopmentDaemon, BackgroundDiscoveryDaemon
 
 __all__ = [
     "Event",
@@ -22,4 +23,7 @@ __all__ = [
     "AuditEntry",
     "Watchdog",
     "MissionScheduler",
+    "AutonomyLevel",
+    "DevelopmentDaemon",
+    "BackgroundDiscoveryDaemon",
 ]
