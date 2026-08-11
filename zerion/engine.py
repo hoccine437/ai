@@ -29,6 +29,8 @@ from zerion.world.tracker import WorldTracker, DriftAnomaly
 from zerion.world.epistemic import EpistemicStatus, EpistemicAssertion
 from zerion.world.causal import CausalHypothesis
 from zerion.counterfactual.engine import CounterfactualEngine, CounterfactualQuery
+from zerion.unknown.unknown_space import UnknownSpaceEngine, EpistemicVoidType
+from zerion.architecture_search.search_engine import ArchitectureSearchEngine, ArchitectureCandidate
 
 # --- Self-Model & Cognitive Maturity ---
 from zerion.self_model.introspector import SelfModel
@@ -147,11 +149,13 @@ class AscendantEngine:
         # 2. Identity Core & Invariants
         self.identity = IdentityCore(storage_path=str(self.data_dir / "identity.json"))
 
-        # 3. World Model 3.0 & Counterfactuals
+        # 3. World Model 3.0 & Counterfactuals & Unknown Space
         self.world = WorldModel(db_path=str(self.data_dir / "world_model.db"))
         self.world_tracker = WorldTracker(self.world)
+        self.unknown_space = UnknownSpaceEngine(db_path=str(self.data_dir / "unknown_space.db"))
         self.sandbox = ExecutionSandbox()
         self.counterfactual = CounterfactualEngine(sandbox=self.sandbox)
+        self.architecture_search = ArchitectureSearchEngine(db_path=str(self.data_dir / "architecture_search.db"))
 
         # 4. Self Model & Maturity
         self.self_model = SelfModel(db_path=str(self.data_dir / "self_model.db"))
@@ -288,10 +292,11 @@ class AscendantEngine:
         self._cycle_count += 1
         cycle_id = f"gen_cycle_{self._cycle_count}_{int(time.time())}"
 
-        # 1. PERCEIVE & UPDATE WORLD MODEL 3.0
+        # 1. PERCEIVE & UPDATE WORLD MODEL 3.0 & UNKNOWN SPACE
         snap = self.resources.sample()
         self.world_tracker.record_observation("host_cpu", "load_percent", snap.cpu_percent, source="resource_governor")
         self.world_tracker.record_observation("host_mem", "available_mb", snap.memory_available_mb, source="resource_governor")
+        self.unknown_space.scan_for_blind_spots(self.world.list_nodes())
 
         # 2. UPDATE SELF MODEL & CHECK OBJECTIVES
         active_objs = self.identity.list_objectives(active_only=True)

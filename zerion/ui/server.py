@@ -1,7 +1,6 @@
 """
-ZERION-X — GENESIS Cinematic Cybernetic Web Server
-Serves the exact reference UI and provides live runtime REST API endpoints on 0.0.0.0.
-Uses pure Python standard library (no heavy third-party framework required).
+ZERION-X — GENESIS ∞ Full REST API & Cybernetic Web Server
+Exposes all required runtime endpoints and serves the high-fidelity cinematic UI on 0.0.0.0.
 """
 
 import asyncio
@@ -103,6 +102,77 @@ class GenesisWebServer:
                 body = json.dumps(self.engine.ui_bridge.current_state.to_dict()).encode("utf-8")
                 self._send_response(writer, 200, "application/json", body)
 
+            elif method == "GET" and path == "/api/status":
+                mat = self.engine.maturity_evaluator.evaluate()
+                res = {
+                    "system_name": self.engine.identity.system_name,
+                    "maturity_level": mat.current_level.value,
+                    "genome_version": self.engine.genome_manager.current_genome.version,
+                    "active_objectives": len(self.engine.continuous_objectives.list_active_objectives()),
+                    "active_strategies": len(self.engine.strategy_registry.list_strategies()),
+                    "total_capabilities": len(self.engine.self_model._capabilities)
+                }
+                self._send_response(writer, 200, "application/json", json.dumps(res).encode("utf-8"))
+
+            elif method == "GET" and path == "/api/objectives":
+                objs = [o.to_dict() for o in self.engine.continuous_objectives.list_active_objectives()]
+                self._send_response(writer, 200, "application/json", json.dumps(objs).encode("utf-8"))
+
+            elif method == "GET" and path == "/api/problems":
+                probs = [p.to_dict() for p in self.engine.organism.problems.get_recent_problems()]
+                self._send_response(writer, 200, "application/json", json.dumps(probs).encode("utf-8"))
+
+            elif method == "GET" and path == "/api/questions":
+                qs = [q.to_dict() for q in self.engine.question_graph.list_questions()[:10]]
+                self._send_response(writer, 200, "application/json", json.dumps(qs).encode("utf-8"))
+
+            elif method == "GET" and path == "/api/genome":
+                self._send_response(writer, 200, "application/json", json.dumps(self.engine.genome_manager.current_genome.to_dict()).encode("utf-8"))
+
+            elif method == "GET" and path == "/api/maturity":
+                mat = self.engine.maturity_evaluator.evaluate()
+                self._send_response(writer, 200, "application/json", json.dumps(mat.to_dict()).encode("utf-8"))
+
+            elif method == "GET" and path == "/api/strategies":
+                strats = [s.to_dict() for s in self.engine.strategy_registry.list_strategies()]
+                self._send_response(writer, 200, "application/json", json.dumps(strats).encode("utf-8"))
+
+            elif method == "GET" and path == "/api/capabilities":
+                caps = self.engine.self_model.what_can_i_do()
+                self._send_response(writer, 200, "application/json", json.dumps(caps).encode("utf-8"))
+
+            elif method == "GET" and path == "/api/memory":
+                mem = {
+                    "episodes_count": len(self.engine.memory._episodes),
+                    "procedural_rules": [r.to_dict() for r in self.engine.memory.list_procedural_rules()[:10]]
+                }
+                self._send_response(writer, 200, "application/json", json.dumps(mem).encode("utf-8"))
+
+            elif method == "GET" and path == "/api/unknown":
+                voids = [v.to_dict() for v in self.engine.unknown_space.get_highest_priority_voids()]
+                self._send_response(writer, 200, "application/json", json.dumps(voids).encode("utf-8"))
+
+            elif method == "GET" and path == "/api/architecture":
+                cands = [c.to_dict() for c in self.engine.architecture_search.list_candidates()]
+                self._send_response(writer, 200, "application/json", json.dumps(cands).encode("utf-8"))
+
+            elif method == "POST" and path == "/api/experiment":
+                exp_res = await self.engine.self_experimentation.run_architecture_experiment(
+                    hypothesis="Verification depth scaling",
+                    target_dimension="verification_ratio",
+                    control_val=0.80,
+                    treatment_val=0.95
+                )
+                self._send_response(writer, 200, "application/json", json.dumps(exp_res.to_dict()).encode("utf-8"))
+
+            elif method == "POST" and path == "/api/learn":
+                distilled = self.engine.memory.trigger_distillation()
+                self._send_response(writer, 200, "application/json", json.dumps({"new_rules": len(distilled)}).encode("utf-8"))
+
+            elif method == "POST" and path == "/api/mission":
+                mis = self.engine.missions.create_mission("Autonomous Genesis Exploration")
+                self._send_response(writer, 200, "application/json", json.dumps(mis.to_dict()).encode("utf-8"))
+
             elif method == "GET" and path.startswith("/api/level/"):
                 lvl_str = path.replace("/api/level/", "")
                 try:
@@ -112,10 +182,6 @@ class GenesisWebServer:
                     self._send_response(writer, 200, "application/json", body)
                 except ValueError:
                     self._send_response(writer, 400, "application/json", b'{"error": "Invalid level"}')
-
-            elif method == "GET" and path == "/api/genome":
-                body = json.dumps(self.engine.genome_manager.current_genome.to_dict()).encode("utf-8")
-                self._send_response(writer, 200, "application/json", body)
 
             else:
                 self._send_response(writer, 404, "application/json", b'{"error": "Not Found"}')
@@ -160,9 +226,3 @@ async def run_server(port: int = 8080, data_dir: str = "data"):
     except (asyncio.CancelledError, KeyboardInterrupt):
         await server.stop()
         await engine.stop()
-
-
-if __name__ == "__main__":
-    import sys
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-    asyncio.run(run_server(port=port))
