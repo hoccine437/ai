@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# SQLite and runtime data directories
+data/
+data_eval/
+*.db
+*.db-wal
+*.db-shm
+*.jsonl
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/

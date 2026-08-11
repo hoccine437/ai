@@ -1,0 +1,13 @@
+# ZERION-X — GENESIS & Ω Intelligence Foundry
+# Core runtime is pure Python 3.9+ standard library for ultra-portable execution (Android / Termux / Edge / Server)
+
+# Optional Foundation Intelligence & Model Providers
+openai>=1.0.0
+httpx>=0.25.0
+
+# Optional Local Quantized GGUF Model Execution
+# llama-cpp-python>=0.2.0
+
+# Optional Hardware Audio Device Streaming
+# sounddevice>=0.4.6
+# numpy>=1.24.0
