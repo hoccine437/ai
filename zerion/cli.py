@@ -15,6 +15,8 @@ async def run_cli():
     parser.add_argument("--cycles", type=int, default=1, help="Execute N autonomous developmental flywheel cycles")
     parser.add_argument("--benchmark", action="store_true", help="Run 14-category scientific benchmark suite")
     parser.add_argument("--scoreboard", action="store_true", help="Display developmental scoreboard")
+    parser.add_argument("--ui", action="store_true", help="Start the ZERION-X GENESIS Cinematic Cybernetic Web Interface")
+    parser.add_argument("--port", type=int, default=8080, help="Port for the UI web server (default: 8080)")
     parser.add_argument("--genome", action="store_true", help="Inspect 22-dimensional Cognitive Genome")
     parser.add_argument("--maturity", action="store_true", help="Assess current Cognitive Maturity Level (L0-L7)")
     parser.add_argument("--level", type=int, choices=range(1, 8), help="Query 7-Level Cognitive Hierarchy (1 to 7)")
@@ -85,6 +87,17 @@ async def run_cli():
 
         elif args.scoreboard:
             print(engine.scoreboard.render_summary_text())
+
+        elif args.ui:
+            from zerion.ui.server import GenesisWebServer
+            server = GenesisWebServer(engine=engine, host="0.0.0.0", port=args.port)
+            await server.start()
+            print(f"[GENESIS UI] Live interactive interface running at http://0.0.0.0:{args.port}")
+            try:
+                while True:
+                    await asyncio.sleep(3600)
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                await server.stop()
 
         else:
             n = max(1, args.cycles)

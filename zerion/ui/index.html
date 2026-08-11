@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ZERION-X — GENESIS</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        body, html {
+            width: 100%;
+            height: 100%;
+            background-color: #040608;
+            color: #00e5ff;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, "Helvetica Neue", monospace, sans-serif;
+            overflow: hidden;
+        }
+
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Ambient scanline and cinematic noise overlay */
+        .scanlines {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(
+                rgba(18, 16, 16, 0) 50%, 
+                rgba(0, 0, 0, 0.25) 50%
+            ), linear-gradient(
+                90deg,
+                rgba(255, 0, 0, 0.01),
+                rgba(0, 255, 0, 0.005),
+                rgba(0, 0, 255, 0.01)
+            );
+            background-size: 100% 3px, 6px 100%;
+            pointer-events: none;
+            z-index: 2;
+            opacity: 0.7;
+        }
+
+        .vignette {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            box-shadow: inset 0 0 140px rgba(0, 0, 0, 0.95);
+            pointer-events: none;
+            z-index: 3;
+        }
+
+        /* Minimal Micro-HUD telemetry overlays embedded directly into visual field */
+        .hud-top-left {
+            position: absolute;
+            top: 24px;
+            left: 28px;
+            z-index: 10;
+            font-size: 11px;
+            letter-spacing: 2px;
+            color: rgba(0, 229, 255, 0.65);
+            line-height: 1.6;
+            text-transform: uppercase;
+        }
+
+        .hud-top-right {
+            position: absolute;
+            top: 24px;
+            right: 28px;
+            z-index: 10;
+            font-size: 11px;
+            letter-spacing: 2px;
+            color: rgba(255, 153, 0, 0.85);
+            text-align: right;
+            line-height: 1.6;
+            text-transform: uppercase;
+        }
+
+        .hud-bottom-left {
+            position: absolute;
+            bottom: 24px;
+            left: 28px;
+            z-index: 10;
+            font-size: 10px;
+            letter-spacing: 1.5px;
+            color: rgba(0, 229, 255, 0.45);
+            line-height: 1.5;
+            max-width: 360px;
+            pointer-events: none;
+        }
+
+        .hud-bottom-right {
+            position: absolute;
+            bottom: 24px;
+            right: 28px;
+            z-index: 10;
+            font-size: 10px;
+            letter-spacing: 1.5px;
+            color: rgba(0, 229, 255, 0.45);
+            text-align: right;
+            line-height: 1.5;
+        }
+
+        .state-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border: 1px solid rgba(0, 229, 255, 0.3);
+            background: rgba(0, 229, 255, 0.05);
+            color: #00e5ff;
+            font-weight: 600;
+            border-radius: 2px;
+            margin-top: 4px;
+            letter-spacing: 1px;
+            transition: all 0.3s ease;
+        }
+
+        .state-badge.thinking {
+            border-color: rgba(255, 170, 0, 0.6);
+            color: #ffaa00;
+            background: rgba(255, 170, 0, 0.08);
+            box-shadow: 0 0 12px rgba(255, 170, 0, 0.3);
+        }
+
+        .state-badge.developing {
+            border-color: rgba(0, 255, 150, 0.6);
+            color: #00ff96;
+            background: rgba(0, 255, 150, 0.08);
+            box-shadow: 0 0 12px rgba(0, 255, 150, 0.3);
+        }
+
+        /* Subtle Interactive Trigger Buttons */
+        .controls-bar {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 20;
+            display: flex;
+            gap: 12px;
+        }
+
+        .genesis-btn {
+            background: rgba(0, 10, 20, 0.6);
+            border: 1px solid rgba(0, 229, 255, 0.3);
+            color: #00e5ff;
+            padding: 8px 18px;
+            font-size: 11px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            cursor: pointer;
+            border-radius: 2px;
+            backdrop-filter: blur(8px);
+            transition: all 0.25s ease;
+            outline: none;
+        }
+
+        .genesis-btn:hover {
+            border-color: #00e5ff;
+            background: rgba(0, 229, 255, 0.15);
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
+        }
+
+        .genesis-btn:active {
+            transform: scale(0.97);
+        }
+
+        .pulse-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            background-color: #ff9900;
+            border-radius: 50%;
+            margin-right: 6px;
+            box-shadow: 0 0 8px #ff9900;
+            animation: pulse-dot-anim 1.8s infinite ease-in-out;
+        }
+
+        @keyframes pulse-dot-anim {
+            0%, 100% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(1.6); opacity: 1; box-shadow: 0 0 14px #ff9900; }
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container">
+        <canvas id="genesisCanvas"></canvas>
+    </div>
+    
+    <div class="scanlines"></div>
+    <div class="vignette"></div>
+
+    <!-- Top Left Micro-HUD: System Identity & State -->
+    <div class="hud-top-left">
+        <div>ZERION-X <span style="color: #ffaa00;">GENESIS</span></div>
+        <div style="font-size: 9px; opacity: 0.6; margin-top: 2px;">AUTONOMOUS DEVELOPMENTAL SUBSTRATE</div>
+        <div id="uiStateBadge" class="state-badge">IDLE</div>
+    </div>
+
+    <!-- Top Right Micro-HUD: Cognitive Telemetry -->
+    <div class="hud-top-right">
+        <div><span class="pulse-dot"></span>CORE FREQ: <span id="coreFreq">1.20</span> HZ</div>
+        <div style="font-size: 9px; opacity: 0.7; margin-top: 2px;">CONFIDENCE: <span id="confVal">95.0%</span></div>
+        <div style="font-size: 9px; opacity: 0.7;">MATURITY: <span id="matVal" style="color:#00ff96;">L6_META_LEARNING</span></div>
+    </div>
+
+    <!-- Bottom Left: Active Cognitive Goal & Explanation Chain -->
+    <div class="hud-bottom-left" id="explanationBox">
+        <div style="color: #ffaa00; margin-bottom: 3px; font-weight: 600;">ACTIVE OBJECTIVE</div>
+        <div id="activeGoal" style="color: #ffffff; margin-bottom: 6px;">Continuous Anomaly and Inefficiency Discovery</div>
+        <div id="activeStrategy" style="font-size: 9px; opacity: 0.6;">STRATEGY: AdversarialInvariantDefense</div>
+    </div>
+
+    <!-- Bottom Right: Resource Governor Telemetry -->
+    <div class="hud-bottom-right">
+        <div>HOST: <span id="cpuVal">12.5%</span> CPU / <span id="memVal">850MB</span> RAM</div>
+        <div style="font-size: 9px; opacity: 0.6;">SECURITY: IMMUNE CORE ACTIVE (INV-001..INV-010)</div>
+        <div style="font-size: 9px; color: #00ff96;">ACCELERATION: 2.57X (2nd-Order Active)</div>
+    </div>
+
+    <!-- Minimal Interactive Controls -->
+    <div class="controls-bar">
+        <button class="genesis-btn" id="btnFlywheel">Trigger Flywheel Cycle</button>
+        <button class="genesis-btn" id="btnGenome">Query Genome</button>
+        <button class="genesis-btn" id="btnIntrospect">Introspect L7</button>
+    </div>
+
+    <script>
+        // High-Fidelity Cybernetic Humanoid Canvas Renderer
+        const canvas = document.getElementById('genesisCanvas');
+        const ctx = canvas.getContext('2d');
+
+        let width, height, dpr;
+        let time = 0;
+        let particles = [];
+        let neuralLines = [];
+
+        // Runtime dynamic state properties
+        let uiState = {
+            runtime_state: 'IDLE',
+            core_glow_intensity: 0.85,
+            cyan_contour_activity: 0.40,
+            neural_pulse_rate: 1.2,
+            confidence: 0.95
+        };
+
+        function resize() {
+            dpr = window.devicePixelRatio || 1;
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            ctx.scale(dpr, dpr);
+            initParticles();
+        }
+        window.addEventListener('resize', resize);
+
+        function initParticles() {
+            particles = [];
+            const count = Math.floor(width < 768 ? 40 : 80);
+            for (let i = 0; i < count; i++) {
+                particles.push({
+                    x: (Math.random() - 0.5) * 320,
+                    y: (Math.random() - 0.5) * 400,
+                    size: Math.random() * 2 + 0.5,
+                    vx: (Math.random() - 0.5) * 0.4,
+                    vy: (Math.random() - 0.5) * 0.4 - 0.2,
+                    alpha: Math.random() * 0.7 + 0.2,
+                    isCore: Math.random() < 0.4
+                });
+            }
+
+            neuralLines = [];
+            for (let i = 0; i < 24; i++) {
+                neuralLines.push({
+                    x1: (Math.random() - 0.5) * 120,
+                    y1: (Math.random() - 0.5) * 140 - 40,
+                    x2: (Math.random() - 0.5) * 160,
+                    y2: (Math.random() - 0.5) * 160 - 30,
+                    alpha: Math.random() * 0.4 + 0.1,
+                    speed: Math.random() * 0.02 + 0.01
+                });
+            }
+        }
+
+        // Draw Reference Cybernetic Humanoid Entity
+        function drawCyberneticHumanoid(cx, cy, scale) {
+            const glow = uiState.core_glow_intensity;
+            const cyanAct = uiState.cyan_contour_activity;
+            const pulse = Math.sin(time * uiState.neural_pulse_rate * 2) * 0.15 + 0.85;
+
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.scale(scale, scale);
+
+            // 1. Background Grid & Ambient Atmospheric Texture
+            ctx.strokeStyle = 'rgba(0, 229, 255, 0.025)';
+            ctx.lineWidth = 1;
+            const gridSize = 45;
+            for (let x = -width/2; x < width/2; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, -height/2);
+                ctx.lineTo(x, height/2);
+                ctx.stroke();
+            }
+            for (let y = -height/2; y < height/2; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(-width/2, y);
+                ctx.lineTo(width/2, y);
+                ctx.stroke();
+            }
+
+            // 2. Torso / Shoulders Circuitry & Holographic Lines
+            ctx.strokeStyle = `rgba(0, 229, 255, ${0.45 * cyanAct + 0.2})`;
+            ctx.lineWidth = 1.8;
+            ctx.shadowColor = '#00e5ff';
+            ctx.shadowBlur = 12 * cyanAct;
+
+            // Neck & Shoulders Contour
+            ctx.beginPath();
+            // Left shoulder
+            ctx.moveTo(-160, 180);
+            ctx.lineTo(-90, 110);
+            ctx.lineTo(-40, 80);
+            ctx.lineTo(-30, 40);
+            // Right shoulder
+            ctx.moveTo(160, 180);
+            ctx.lineTo(90, 110);
+            ctx.lineTo(40, 80);
+            ctx.lineTo(30, 40);
+            ctx.stroke();
+
+            // Collar & Torso structural ribs
+            ctx.strokeStyle = 'rgba(0, 229, 255, 0.25)';
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.moveTo(-70, 130); ctx.lineTo(70, 130);
+            ctx.moveTo(-110, 160); ctx.lineTo(110, 160);
+            ctx.moveTo(-45, 100); ctx.lineTo(-10, 180);
+            ctx.moveTo(45, 100); ctx.lineTo(10, 180);
+            ctx.stroke();
+
+            // 3. Central Head Outer Cyan Contour
+            ctx.strokeStyle = `rgba(0, 229, 255, ${0.85 * pulse})`;
+            ctx.lineWidth = 2.4;
+            ctx.shadowColor = '#00e5ff';
+            ctx.shadowBlur = 22 * cyanAct + 8;
+
+            ctx.beginPath();
+            // Cybernetic faceted head contour
+            ctx.moveTo(0, -150);     // Top vertex
+            ctx.lineTo(48, -135);
+            ctx.lineTo(75, -90);
+            ctx.lineTo(82, -30);
+            ctx.lineTo(60, 35);
+            ctx.lineTo(32, 68);      // Jawline right
+            ctx.lineTo(0, 82);        // Chin vertex
+            ctx.lineTo(-32, 68);     // Jawline left
+            ctx.lineTo(-60, 35);
+            ctx.lineTo(-82, -30);
+            ctx.lineTo(-75, -90);
+            ctx.lineTo(-48, -135);
+            ctx.closePath();
+            ctx.stroke();
+
+            // Inner cyan geometry facets
+            ctx.strokeStyle = 'rgba(0, 229, 255, 0.35)';
+            ctx.lineWidth = 1.0;
+            ctx.beginPath();
+            ctx.moveTo(0, -150); ctx.lineTo(0, -40);
+            ctx.moveTo(-48, -135); ctx.lineTo(-30, -50); ctx.lineTo(0, -40);
+            ctx.moveTo(48, -135); ctx.lineTo(30, -50); ctx.lineTo(0, -40);
+            ctx.moveTo(-75, -90); ctx.lineTo(-40, -10); ctx.lineTo(0, 15);
+            ctx.moveTo(75, -90); ctx.lineTo(40, -10); ctx.lineTo(0, 15);
+            ctx.moveTo(-32, 68); ctx.lineTo(0, 15); ctx.lineTo(32, 68);
+            ctx.stroke();
+
+            // 4. Warm Orange/Golden Luminous Central Core (Visual Focal Point)
+            const corePulse = Math.sin(time * 2.5) * 0.12 + 0.88;
+            const coreGrad = ctx.createRadialGradient(0, -35, 6, 0, -35, 95);
+            coreGrad.addColorStop(0, `rgba(255, 240, 200, ${1.0 * glow})`);
+            coreGrad.addColorStop(0.2, `rgba(255, 175, 20, ${0.95 * glow * corePulse})`);
+            coreGrad.addColorStop(0.55, `rgba(255, 100, 0, ${0.65 * glow * corePulse})`);
+            coreGrad.addColorStop(0.85, `rgba(255, 60, 0, ${0.25 * glow})`);
+            coreGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+            ctx.shadowColor = '#ff8800';
+            ctx.shadowBlur = 45 * glow * corePulse;
+            ctx.fillStyle = coreGrad;
+            ctx.beginPath();
+            ctx.arc(0, -35, 95, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Internal Neural Activity Lines
+            ctx.shadowBlur = 6;
+            ctx.shadowColor = '#ffaa00';
+            for (let n of neuralLines) {
+                const a = Math.sin(time * 3 + n.speed * 100) * 0.5 + 0.5;
+                ctx.strokeStyle = `rgba(255, 200, 80, ${n.alpha * a * glow})`;
+                ctx.lineWidth = 1.0;
+                ctx.beginPath();
+                ctx.moveTo(n.x1, n.y1);
+                ctx.lineTo(n.x2, n.y2);
+                ctx.stroke();
+            }
+
+            // 5. Floating Cybernetic Particles
+            for (let p of particles) {
+                p.x += p.vx;
+                p.y += p.vy;
+                if (p.y < -220) p.y = 200;
+                if (p.x < -180) p.x = 180;
+                if (p.x > 180) p.x = -180;
+
+                ctx.shadowBlur = p.isCore ? 12 : 6;
+                ctx.shadowColor = p.isCore ? '#ff9900' : '#00e5ff';
+                ctx.fillStyle = p.isCore 
+                    ? `rgba(255, 170, 40, ${p.alpha * glow})` 
+                    : `rgba(0, 229, 255, ${p.alpha * cyanAct})`;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            ctx.restore();
+        }
+
+        function animate() {
+            time += 0.016;
+            ctx.clearRect(0, 0, width, height);
+
+            const cx = width / 2;
+            const cy = height / 2 + (width < 768 ? -20 : -10);
+            const scale = Math.min(width / 750, height / 850) * 1.15;
+
+            drawCyberneticHumanoid(cx, cy, Math.max(0.65, scale));
+            requestAnimationFrame(animate);
+        }
+
+        // Live Telemetry Polling and Interaction
+        async function fetchUIState() {
+            try {
+                const res = await fetch('/api/state');
+                if (res.ok) {
+                    const data = await res.json();
+                    uiState = data;
+                    
+                    // Update HUD elements
+                    const badge = document.getElementById('uiStateBadge');
+                    badge.innerText = data.runtime_state || 'IDLE';
+                    badge.className = 'state-badge ' + (data.runtime_state.toLowerCase());
+                    
+                    document.getElementById('coreFreq').innerText = (data.neural_pulse_rate || 1.2).toFixed(2);
+                    document.getElementById('confVal').innerText = ((data.confidence || 0.95) * 100).toFixed(1) + '%';
+                    document.getElementById('matVal').innerText = data.development_state ? data.development_state.replace('Maturity: ', '') : 'L6_META_LEARNING';
+                    
+                    document.getElementById('activeGoal').innerText = data.active_goal || 'Continuous Discovery';
+                    if (data.explanation_chain && data.explanation_chain[0]) {
+                        document.getElementById('activeStrategy').innerText = data.explanation_chain[0];
+                    }
+
+                    if (data.resource_state) {
+                        document.getElementById('cpuVal').innerText = data.resource_state.cpu_percent + '%';
+                        document.getElementById('memVal').innerText = data.resource_state.memory_mb + 'MB';
+                    }
+                }
+            } catch (e) {
+                // Offline fallback representation
+            }
+        }
+
+        // Action Handlers
+        document.getElementById('btnFlywheel').addEventListener('click', async () => {
+            const badge = document.getElementById('uiStateBadge');
+            badge.innerText = 'DEVELOPING';
+            badge.className = 'state-badge developing';
+            uiState.core_glow_intensity = 1.0;
+            uiState.neural_pulse_rate = 2.5;
+
+            try {
+                const res = await fetch('/api/cycle', { method: 'POST' });
+                await fetchUIState();
+            } catch (e) {
+                console.error(e);
+            }
+        });
+
+        document.getElementById('btnGenome').addEventListener('click', async () => {
+            alert("Cognitive Genome (v2): 22 Active Dimensions\nReasoning Depth: 3\nVerification Ratio: 85%\nLearning Acceleration: 2.57x\nActive Phenotypes: Coding, Research, Debugging, Security");
+        });
+
+        document.getElementById('btnIntrospect').addEventListener('click', async () => {
+            const res = await fetch('/api/level/7');
+            const data = await res.json();
+            alert(`Level 7 Introspection:\nQuestion: ${data.question}\nAcceleration: ${data.current_learning_acceleration}\nOptimization: ${data.meta_learning_optimization}`);
+        });
+
+        // Initialize
+        resize();
+        initParticles();
+        animate();
+        setInterval(fetchUIState, 2000);
+        fetchUIState();
+    </script>
+</body>
+</html>

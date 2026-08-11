@@ -96,6 +96,7 @@ from zerion.evolution.ascension import AscensionEngine
 from zerion.benchmarks.runner import BenchmarkRunner
 from zerion.benchmarks.scoreboard import DevelopmentalScoreboard
 from zerion.benchmarks.anti_gaming import AntiGamingDetector
+from zerion.ui.state_bridge import UIStateBridge
 from zerion.integration.termux_adapter import TermuxAdapter
 from zerion.integration.offline_fallback import OfflineFallbackManager
 
@@ -203,6 +204,7 @@ class AscendantEngine:
         )
         self.scoreboard = DevelopmentalScoreboard()
         self.anti_gaming = AntiGamingDetector()
+        self.ui_bridge = UIStateBridge()
 
         # 13. Integration & Fallbacks
         self.termux = TermuxAdapter()
