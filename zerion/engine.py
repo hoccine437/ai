@@ -111,6 +111,8 @@ from zerion.entity.state import CognitiveEntityStateStore, EntityLifecycleState
 from zerion.self_model.self_predictor import SelfPredictor
 from zerion.architecture.autophagy import CognitiveAutophagyEngine
 from zerion.intelligence_forge.organism_runtime.foundry import IntelligenceFoundry, FoundryCycleTelemetry
+from zerion.cognitive_species.cognitive_pulse import CognitiveSpeciesRuntime, SpeciesCycleTrace
+from zerion.model_providers.router import CognitiveRouter
 
 
 @dataclass
@@ -224,9 +226,10 @@ class AscendantEngine:
         self.ui_bridge = UIStateBridge()
         self.voice_pipeline = VoiceFirstInteractionPipeline(engine_ref=self, ui_bridge=self.ui_bridge)
 
-        # 13. Cognitive OS & Autonomous Organism & Intelligence Foundry
+        # 13. Cognitive OS & Autonomous Organism & Intelligence Foundry & Species Runtime
         self.organism = CognitiveOrganism(data_dir=str(self.data_dir))
         self.foundry = IntelligenceFoundry(data_dir=str(self.data_dir))
+        self.species_runtime = CognitiveSpeciesRuntime(data_dir=str(self.data_dir))
         self.timeline = DevelopmentTimelineManager(db_path=str(self.data_dir / "timeline.db"))
         self.continuous_objectives = self.organism.objectives
         self.mobile_governor = MobileResourceGovernor()
@@ -509,6 +512,13 @@ class AscendantEngine:
         )
         self._cycle_history.append(trace)
         return trace
+
+    async def run_species_pulse(self) -> SpeciesCycleTrace:
+        """Executes a resource-aware Cognitive Species pulse cycle."""
+        snap = self.resources.sample()
+        return await self.species_runtime.execute_pulse_cycle({
+            "resource_metrics": {"cpu_percent": snap.cpu_percent, "memory_mb": snap.memory_available_mb}
+        })
 
     # Section 47: THE ULTIMATE DESIGN TEST RUNNER
     async def ask_ultimate_questions(self) -> Dict[str, Any]:
