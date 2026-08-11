@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ZERION-X — GENESIS</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>ZERION-X — GENESIS (9:16 Portrait)</title>
     <style>
         * {
             box-sizing: border-box;
@@ -11,15 +11,44 @@
             padding: 0;
             user-select: none;
             -webkit-user-select: none;
+            font-family: "SF Mono", "Roboto Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
         }
 
         body, html {
             width: 100%;
             height: 100%;
-            background-color: #040608;
-            color: #00e5ff;
-            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, "Helvetica Neue", monospace, sans-serif;
+            background-color: #050508;
+            color: #4FD6FF;
             overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* 
+           Canonical 9:16 Portrait Smartphone Frame Container.
+           On smartphones: fills 100% of the portrait viewport.
+           On desktop/tablets: neatly centered in a canonical 9:16 smartphone enclosure.
+        */
+        #phone-viewport {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            max-width: calc(100vh * (9 / 16));
+            max-height: 100vh;
+            aspect-ratio: 9 / 16;
+            background-color: #0E0E14;
+            overflow: hidden;
+            box-shadow: 0 0 50px rgba(0, 0, 0, 0.9), 0 0 1px rgba(0, 196, 255, 0.2);
+        }
+
+        @media (max-aspect-ratio: 9/16) {
+            #phone-viewport {
+                width: 100vw;
+                height: 100vh;
+                max-width: 100vw;
+                aspect-ratio: unset;
+            }
         }
 
         #canvas-container {
@@ -37,7 +66,21 @@
             height: 100%;
         }
 
-        /* Ambient scanline and cinematic noise overlay */
+        /* Subtle Ambient Textures & Vignette */
+        .ambient-grid {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(rgba(0, 196, 255, 0.015) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 196, 255, 0.015) 1px, transparent 1px);
+            background-size: 24px 24px;
+            pointer-events: none;
+            z-index: 2;
+        }
+
         .scanlines {
             position: absolute;
             top: 0;
@@ -45,18 +88,13 @@
             width: 100%;
             height: 100%;
             background: linear-gradient(
-                rgba(18, 16, 16, 0) 50%, 
-                rgba(0, 0, 0, 0.25) 50%
-            ), linear-gradient(
-                90deg,
-                rgba(255, 0, 0, 0.01),
-                rgba(0, 255, 0, 0.005),
-                rgba(0, 0, 255, 0.01)
+                rgba(14, 14, 20, 0) 50%, 
+                rgba(0, 0, 0, 0.3) 50%
             );
-            background-size: 100% 3px, 6px 100%;
+            background-size: 100% 4px;
             pointer-events: none;
-            z-index: 2;
-            opacity: 0.7;
+            z-index: 3;
+            opacity: 0.55;
         }
 
         .vignette {
@@ -65,447 +103,491 @@
             left: 0;
             width: 100%;
             height: 100%;
-            box-shadow: inset 0 0 140px rgba(0, 0, 0, 0.95);
+            box-shadow: inset 0 0 120px rgba(10, 10, 16, 0.95);
             pointer-events: none;
-            z-index: 3;
+            z-index: 4;
         }
 
-        /* Minimal Micro-HUD telemetry overlays embedded directly into visual field */
-        .hud-top-left {
+        /* Safe Area and Micro-HUD Layout */
+        .hud-control-btn {
             position: absolute;
-            top: 24px;
-            left: 28px;
-            z-index: 10;
-            font-size: 11px;
-            letter-spacing: 2px;
-            color: rgba(0, 229, 255, 0.65);
-            line-height: 1.6;
+            top: calc(env(safe-area-inset-top, 0px) + 16px);
+            left: 16px;
+            width: 56px;
+            height: 28px;
+            border-radius: 8px;
+            border: 1px solid rgba(58, 168, 216, 0.7);
+            background: rgba(14, 14, 20, 0.7);
+            color: #3AA8D8;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
             text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 10;
+            backdrop-filter: blur(8px);
+            transition: all 0.2s ease;
+        }
+
+        .hud-control-btn:hover {
+            border-color: #00C4FF;
+            color: #00C4FF;
+            box-shadow: 0 0 12px rgba(0, 196, 255, 0.35);
         }
 
         .hud-top-right {
             position: absolute;
-            top: 24px;
-            right: 28px;
+            top: calc(env(safe-area-inset-top, 0px) + 16px);
+            right: 16px;
             z-index: 10;
             font-size: 11px;
-            letter-spacing: 2px;
-            color: rgba(255, 153, 0, 0.85);
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            color: #4FD6FF;
             text-align: right;
-            line-height: 1.6;
+            line-height: 1.4;
             text-transform: uppercase;
         }
 
         .hud-bottom-left {
             position: absolute;
-            bottom: 24px;
-            left: 28px;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
+            left: 16px;
             z-index: 10;
-            font-size: 10px;
-            letter-spacing: 1.5px;
-            color: rgba(0, 229, 255, 0.45);
-            line-height: 1.5;
-            max-width: 360px;
+            font-size: 10.5px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            color: #4FD6FF;
+            line-height: 1.4;
+            max-width: 75%;
             pointer-events: none;
         }
 
         .hud-bottom-right {
             position: absolute;
-            bottom: 24px;
-            right: 28px;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
+            right: 16px;
             z-index: 10;
-            font-size: 10px;
-            letter-spacing: 1.5px;
-            color: rgba(0, 229, 255, 0.45);
+            font-size: 10.5px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            color: #4FD6FF;
             text-align: right;
-            line-height: 1.5;
+            line-height: 1.4;
         }
 
-        .state-badge {
+        .status-badge {
             display: inline-block;
-            padding: 3px 8px;
-            border: 1px solid rgba(0, 229, 255, 0.3);
-            background: rgba(0, 229, 255, 0.05);
-            color: #00e5ff;
-            font-weight: 600;
-            border-radius: 2px;
-            margin-top: 4px;
-            letter-spacing: 1px;
-            transition: all 0.3s ease;
+            color: #4FD6FF;
+            transition: color 0.15s ease-out;
         }
 
-        .state-badge.thinking {
-            border-color: rgba(255, 170, 0, 0.6);
-            color: #ffaa00;
-            background: rgba(255, 170, 0, 0.08);
-            box-shadow: 0 0 12px rgba(255, 170, 0, 0.3);
+        .status-badge.booting {
+            color: #FFD24D;
         }
 
-        .state-badge.developing {
-            border-color: rgba(0, 255, 150, 0.6);
-            color: #00ff96;
-            background: rgba(0, 255, 150, 0.08);
-            box-shadow: 0 0 12px rgba(0, 255, 150, 0.3);
+        .status-badge.speaking {
+            color: #FF8900;
+            text-shadow: 0 0 8px rgba(255, 137, 0, 0.5);
         }
 
-        /* Subtle Interactive Trigger Buttons */
-        .controls-bar {
+        .status-badge.error {
+            color: #FF3B30;
+            text-shadow: 0 0 8px rgba(255, 59, 48, 0.5);
+        }
+
+        /* Contextual Interaction Tray (Aligned for Mobile Portrait Thumb Zone) */
+        .context-tray {
             position: absolute;
-            bottom: 30px;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 55px);
             left: 50%;
             transform: translateX(-50%);
             z-index: 20;
             display: flex;
-            gap: 12px;
+            gap: 8px;
+            width: calc(100% - 32px);
+            justify-content: center;
         }
 
-        .genesis-btn {
-            background: rgba(0, 10, 20, 0.6);
-            border: 1px solid rgba(0, 229, 255, 0.3);
-            color: #00e5ff;
-            padding: 8px 18px;
-            font-size: 11px;
-            letter-spacing: 2px;
+        .tray-btn {
+            background: rgba(14, 14, 20, 0.85);
+            border: 1px solid rgba(58, 168, 216, 0.5);
+            color: #4FD6FF;
+            padding: 7px 12px;
+            font-size: 10px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
             text-transform: uppercase;
             cursor: pointer;
-            border-radius: 2px;
-            backdrop-filter: blur(8px);
-            transition: all 0.25s ease;
-            outline: none;
+            border-radius: 4px;
+            backdrop-filter: blur(10px);
+            transition: all 0.2s ease;
+            flex: 1;
+            max-width: 140px;
+            text-align: center;
         }
 
-        .genesis-btn:hover {
-            border-color: #00e5ff;
-            background: rgba(0, 229, 255, 0.15);
-            box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
+        .tray-btn:hover {
+            border-color: #00C4FF;
+            color: #00C4FF;
+            box-shadow: 0 0 10px rgba(0, 196, 255, 0.3);
         }
 
-        .genesis-btn:active {
+        .tray-btn:active {
             transform: scale(0.97);
-        }
-
-        .pulse-dot {
-            display: inline-block;
-            width: 6px;
-            height: 6px;
-            background-color: #ff9900;
-            border-radius: 50%;
-            margin-right: 6px;
-            box-shadow: 0 0 8px #ff9900;
-            animation: pulse-dot-anim 1.8s infinite ease-in-out;
-        }
-
-        @keyframes pulse-dot-anim {
-            0%, 100% { transform: scale(1); opacity: 0.8; }
-            50% { transform: scale(1.6); opacity: 1; box-shadow: 0 0 14px #ff9900; }
         }
     </style>
 </head>
 <body>
-    <div id="canvas-container">
-        <canvas id="genesisCanvas"></canvas>
-    </div>
-    
-    <div class="scanlines"></div>
-    <div class="vignette"></div>
+    <!-- Canonical 9:16 Portrait Enclosure -->
+    <div id="phone-viewport">
+        <div id="canvas-container">
+            <canvas id="zerionCanvas"></canvas>
+        </div>
+        
+        <div class="ambient-grid"></div>
+        <div class="scanlines"></div>
+        <div class="vignette"></div>
 
-    <!-- Top Left Micro-HUD: System Identity & State -->
-    <div class="hud-top-left">
-        <div>ZERION-X <span style="color: #ffaa00;">GENESIS</span></div>
-        <div style="font-size: 9px; opacity: 0.6; margin-top: 2px;">AUTONOMOUS DEVELOPMENTAL SUBSTRATE</div>
-        <div id="uiStateBadge" class="state-badge">IDLE</div>
-    </div>
+        <!-- HUD Control (Top-Start, 56x28dp, 8dp radius, 16dp inset) -->
+        <div class="hud-control-btn" id="hudControl">HUD</div>
 
-    <!-- Top Right Micro-HUD: Cognitive Telemetry -->
-    <div class="hud-top-right">
-        <div><span class="pulse-dot"></span>CORE FREQ: <span id="coreFreq">1.20</span> HZ</div>
-        <div style="font-size: 9px; opacity: 0.7; margin-top: 2px;">CONFIDENCE: <span id="confVal">95.0%</span></div>
-        <div style="font-size: 9px; opacity: 0.7;">MATURITY: <span id="matVal" style="color:#00ff96;">L6_META_LEARNING</span></div>
-    </div>
+        <!-- Top-Right Telemetry & State Label -->
+        <div class="hud-top-right">
+            <div>STATUS: <span id="statusLabel" class="status-badge booting">ASSEMBLING… 0%</span></div>
+            <div style="font-size: 9.5px; opacity: 0.7; margin-top: 2px;">9:16 PORTRAIT • <span id="confVal">95%</span></div>
+        </div>
 
-    <!-- Bottom Left: Active Cognitive Goal & Explanation Chain -->
-    <div class="hud-bottom-left" id="explanationBox">
-        <div style="color: #ffaa00; margin-bottom: 3px; font-weight: 600;">ACTIVE OBJECTIVE</div>
-        <div id="activeGoal" style="color: #ffffff; margin-bottom: 6px;">Continuous Anomaly and Inefficiency Discovery</div>
-        <div id="activeStrategy" style="font-size: 9px; opacity: 0.6;">STRATEGY: AdversarialInvariantDefense</div>
-    </div>
+        <!-- Bottom-Left Active Objective & Real Strategy -->
+        <div class="hud-bottom-left">
+            <div style="color: #FFD24D; font-size: 9.5px; font-weight: 600;">ACTIVE OBJECTIVE</div>
+            <div id="objectiveText" style="color: #FFFFFF; font-size: 10.5px; margin-bottom: 2px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">Continuous Anomaly and Inefficiency Discovery</div>
+            <div id="strategyText" style="font-size: 9.5px; opacity: 0.7;">STRATEGY: AdversarialInvariantDefense</div>
+        </div>
 
-    <!-- Bottom Right: Resource Governor Telemetry -->
-    <div class="hud-bottom-right">
-        <div>HOST: <span id="cpuVal">12.5%</span> CPU / <span id="memVal">850MB</span> RAM</div>
-        <div style="font-size: 9px; opacity: 0.6;">SECURITY: IMMUNE CORE ACTIVE (INV-001..INV-010)</div>
-        <div style="font-size: 9px; color: #00ff96;">ACCELERATION: 2.57X (2nd-Order Active)</div>
-    </div>
+        <!-- Bottom-Right Hardware & Learning Telemetry -->
+        <div class="hud-bottom-right">
+            <div><span id="hostTele">12.5% CPU</span></div>
+            <div style="font-size: 9.5px; opacity: 0.7;">ACCEL: <span id="accelVal" style="color: #00C4FF;">2.57X</span></div>
+        </div>
 
-    <!-- Minimal Interactive Controls -->
-    <div class="controls-bar">
-        <button class="genesis-btn" id="btnFlywheel">Trigger Flywheel Cycle</button>
-        <button class="genesis-btn" id="btnGenome">Query Genome</button>
-        <button class="genesis-btn" id="btnIntrospect">Introspect L7</button>
+        <!-- Contextual Action Triggers (Mobile-Friendly Thumb Reach) -->
+        <div class="context-tray">
+            <button class="tray-btn" id="btnFlywheel">Flywheel</button>
+            <button class="tray-btn" id="btnSpeak">Sim Voice</button>
+            <button class="tray-btn" id="btnIntrospect">L7 Introspect</button>
+        </div>
     </div>
 
     <script>
-        // High-Fidelity Cybernetic Humanoid Canvas Renderer
-        const canvas = document.getElementById('genesisCanvas');
+        // --- 1. Canonical 9:16 Portrait Canvas Setup & Particle Field ---
+        const canvas = document.getElementById('zerionCanvas');
+        const container = document.getElementById('phone-viewport');
         const ctx = canvas.getContext('2d');
 
         let width, height, dpr;
         let time = 0;
-        let particles = [];
-        let neuralLines = [];
+        let bootStartTime = Date.now();
+        const BOOT_DURATION_MS = 5800;
 
-        // Runtime dynamic state properties
-        let uiState = {
-            runtime_state: 'IDLE',
-            core_glow_intensity: 0.85,
-            cyan_contour_activity: 0.40,
-            neural_pulse_rate: 1.2,
-            confidence: 0.95
-        };
+        const PARTICLE_COUNT = 2000;
+        const targetPositions = new Float32Array(PARTICLE_COUNT * 2);
+        const scatterPositions = new Float32Array(PARTICLE_COUNT * 2);
+        const particleMeta = new Float32Array(PARTICLE_COUNT * 3);    // [type, baseAlpha, delay]
+        
+        // Exact official color tokens
+        const COLOR_BG = '#0E0E14';
+        const COLOR_CYAN_BRIGHT = '#00C4FF';
+        const COLOR_CYAN_DIM = '#3AA8D8';
+        const COLOR_CORE_WHITE = '#FFFFFF';
+        const COLOR_CORE_GOLD = '#FFD24D';
+        const COLOR_CORE_ORANGE = '#FF8900';
+        const COLOR_SPINE_DARK = '#3A2A10';
+        const COLOR_STATUS_TEXT = '#4FD6FF';
+
+        // Precompute Bust Silhouette Target Points Once (Zero per-frame allocation)
+        function precomputeSilhouette() {
+            let seed = 42;
+            function rand() {
+                seed = (seed * 9301 + 49297) % 233280;
+                return seed / 233280;
+            }
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const ratio = i / PARTICLE_COUNT;
+                let tx, ty, type, alpha, delay;
+
+                // Layer A: Head & Neck Flow Lines (40%)
+                if (ratio < 0.40) {
+                    type = 0; // Contour
+                    alpha = 0.85;
+                    const angle = (i / (PARTICLE_COUNT * 0.40)) * Math.PI * 2;
+                    const rx = 80 * (1.0 - 0.12 * Math.abs(Math.sin(angle)));
+                    const ry = 110;
+                    tx = rx * Math.cos(angle);
+                    ty = ry * Math.sin(angle) - 45;
+                }
+                // Layer B: Shoulders & Neck Ribs (25%)
+                else if (ratio < 0.65) {
+                    type = 1; // Shoulder / Spine
+                    alpha = 0.70;
+                    const subT = (ratio - 0.40) / 0.25;
+                    const side = (i % 2 === 0) ? -1 : 1;
+                    tx = side * (22 + 160 * subT);
+                    ty = 75 + 115 * subT;
+                }
+                // Layer C: Crown Density & Scattered Points (35%)
+                else {
+                    type = 2; // Scatter / Crown
+                    const isCrown = rand() < 0.65;
+                    if (isCrown) {
+                        const angle = rand() * Math.PI + Math.PI;
+                        const r = rand() * 90;
+                        tx = r * Math.cos(angle);
+                        ty = r * Math.sin(angle) * 0.7 - 105;
+                        alpha = rand() * 0.35 + 0.45;
+                    } else {
+                        const angle = rand() * Math.PI * 2;
+                        const r = rand() * 180;
+                        tx = r * Math.cos(angle);
+                        ty = r * Math.sin(angle) * 0.85 - 25;
+                        alpha = rand() * 0.30 + 0.20;
+                    }
+                }
+
+                // Scatter coordinates for boot burst (diagonal upward sweep)
+                const sAngle = rand() * Math.PI * 2;
+                const sDist = rand() * 400 + 120;
+                const sx = sDist * Math.cos(sAngle);
+                const sy = sDist * Math.sin(sAngle) - 220;
+                delay = rand() * 350 + 50;
+
+                targetPositions[i * 2] = tx;
+                targetPositions[i * 2 + 1] = ty;
+                scatterPositions[i * 2] = sx;
+                scatterPositions[i * 2 + 1] = sy;
+                particleMeta[i * 3] = type;
+                particleMeta[i * 3 + 1] = alpha;
+                particleMeta[i * 3 + 2] = delay;
+            }
+        }
+        precomputeSilhouette();
 
         function resize() {
             dpr = window.devicePixelRatio || 1;
-            width = window.innerWidth;
-            height = window.innerHeight;
+            const rect = container.getBoundingClientRect();
+            width = rect.width;
+            height = rect.height;
             canvas.width = width * dpr;
             canvas.height = height * dpr;
             ctx.scale(dpr, dpr);
-            initParticles();
         }
         window.addEventListener('resize', resize);
+        resize();
 
-        function initParticles() {
-            particles = [];
-            const count = Math.floor(width < 768 ? 40 : 80);
-            for (let i = 0; i < count; i++) {
-                particles.push({
-                    x: (Math.random() - 0.5) * 320,
-                    y: (Math.random() - 0.5) * 400,
-                    size: Math.random() * 2 + 0.5,
-                    vx: (Math.random() - 0.5) * 0.4,
-                    vy: (Math.random() - 0.5) * 0.4 - 0.2,
-                    alpha: Math.random() * 0.7 + 0.2,
-                    isCore: Math.random() < 0.4
-                });
-            }
+        // --- 2. Live Runtime State & Animation Variables ---
+        let runtimeState = 'BOOTING';
+        let currentPulsePeriod = 2.0;
+        let currentPulseAmp = 0.12;
+        let audioRms = 0.0;
 
-            neuralLines = [];
-            for (let i = 0; i < 24; i++) {
-                neuralLines.push({
-                    x1: (Math.random() - 0.5) * 120,
-                    y1: (Math.random() - 0.5) * 140 - 40,
-                    x2: (Math.random() - 0.5) * 160,
-                    y2: (Math.random() - 0.5) * 160 - 30,
-                    alpha: Math.random() * 0.4 + 0.1,
-                    speed: Math.random() * 0.02 + 0.01
-                });
-            }
-        }
+        let smoothedPulseAmp = 0.12;
+        let smoothedPulsePeriod = 2.0;
 
-        // Draw Reference Cybernetic Humanoid Entity
-        function drawCyberneticHumanoid(cx, cy, scale) {
-            const glow = uiState.core_glow_intensity;
-            const cyanAct = uiState.cyan_contour_activity;
-            const pulse = Math.sin(time * uiState.neural_pulse_rate * 2) * 0.15 + 0.85;
+        // --- 3. 9:16 Portrait Bounded Render Draw Loop ---
+        function render() {
+            time += 0.016;
+            ctx.clearRect(0, 0, width, height);
+
+            const elapsedBoot = Date.now() - bootStartTime;
+            const bootProgress = Math.min(1.0, elapsedBoot / BOOT_DURATION_MS);
+
+            // Interpolate pulse parameters
+            smoothedPulseAmp += (currentPulseAmp - smoothedPulseAmp) * 0.08;
+            smoothedPulsePeriod += (currentPulsePeriod - smoothedPulsePeriod) * 0.08;
+
+            // Canonical 9:16 Portrait Focal Center (top ~45% of portrait viewport)
+            const cx = width / 2;
+            const cy = height * 0.42;
+            // Proportional scaling preserving canonical bust proportions without stretching
+            const scale = Math.min(width / 380, height / 680) * 0.96;
 
             ctx.save();
             ctx.translate(cx, cy);
             ctx.scale(scale, scale);
 
-            // 1. Background Grid & Ambient Atmospheric Texture
-            ctx.strokeStyle = 'rgba(0, 229, 255, 0.025)';
-            ctx.lineWidth = 1;
-            const gridSize = 45;
-            for (let x = -width/2; x < width/2; x += gridSize) {
-                ctx.beginPath();
-                ctx.moveTo(x, -height/2);
-                ctx.lineTo(x, height/2);
-                ctx.stroke();
-            }
-            for (let y = -height/2; y < height/2; y += gridSize) {
-                ctx.beginPath();
-                ctx.moveTo(-width/2, y);
-                ctx.lineTo(width/2, y);
-                ctx.stroke();
-            }
+            // --- LAYER 1: Concentric Ripple Rings Sub-layer (Head Centered) ---
+            if (bootProgress >= 0.85) {
+                const ringAlphaMax = 0.45;
+                const ringCycleDuration = 2800;
+                for (let r = 0; r < 3; r++) {
+                    const ringOffset = r * 900;
+                    const ringElapsed = (Date.now() + ringOffset) % ringCycleDuration;
+                    const ringProgress = ringElapsed / ringCycleDuration;
+                    const currentRadius = ringProgress * 185;
+                    const ringAlpha = (1.0 - ringProgress) * ringAlphaMax;
 
-            // 2. Torso / Shoulders Circuitry & Holographic Lines
-            ctx.strokeStyle = `rgba(0, 229, 255, ${0.45 * cyanAct + 0.2})`;
-            ctx.lineWidth = 1.8;
-            ctx.shadowColor = '#00e5ff';
-            ctx.shadowBlur = 12 * cyanAct;
-
-            // Neck & Shoulders Contour
-            ctx.beginPath();
-            // Left shoulder
-            ctx.moveTo(-160, 180);
-            ctx.lineTo(-90, 110);
-            ctx.lineTo(-40, 80);
-            ctx.lineTo(-30, 40);
-            // Right shoulder
-            ctx.moveTo(160, 180);
-            ctx.lineTo(90, 110);
-            ctx.lineTo(40, 80);
-            ctx.lineTo(30, 40);
-            ctx.stroke();
-
-            // Collar & Torso structural ribs
-            ctx.strokeStyle = 'rgba(0, 229, 255, 0.25)';
-            ctx.lineWidth = 1.2;
-            ctx.beginPath();
-            ctx.moveTo(-70, 130); ctx.lineTo(70, 130);
-            ctx.moveTo(-110, 160); ctx.lineTo(110, 160);
-            ctx.moveTo(-45, 100); ctx.lineTo(-10, 180);
-            ctx.moveTo(45, 100); ctx.lineTo(10, 180);
-            ctx.stroke();
-
-            // 3. Central Head Outer Cyan Contour
-            ctx.strokeStyle = `rgba(0, 229, 255, ${0.85 * pulse})`;
-            ctx.lineWidth = 2.4;
-            ctx.shadowColor = '#00e5ff';
-            ctx.shadowBlur = 22 * cyanAct + 8;
-
-            ctx.beginPath();
-            // Cybernetic faceted head contour
-            ctx.moveTo(0, -150);     // Top vertex
-            ctx.lineTo(48, -135);
-            ctx.lineTo(75, -90);
-            ctx.lineTo(82, -30);
-            ctx.lineTo(60, 35);
-            ctx.lineTo(32, 68);      // Jawline right
-            ctx.lineTo(0, 82);        // Chin vertex
-            ctx.lineTo(-32, 68);     // Jawline left
-            ctx.lineTo(-60, 35);
-            ctx.lineTo(-82, -30);
-            ctx.lineTo(-75, -90);
-            ctx.lineTo(-48, -135);
-            ctx.closePath();
-            ctx.stroke();
-
-            // Inner cyan geometry facets
-            ctx.strokeStyle = 'rgba(0, 229, 255, 0.35)';
-            ctx.lineWidth = 1.0;
-            ctx.beginPath();
-            ctx.moveTo(0, -150); ctx.lineTo(0, -40);
-            ctx.moveTo(-48, -135); ctx.lineTo(-30, -50); ctx.lineTo(0, -40);
-            ctx.moveTo(48, -135); ctx.lineTo(30, -50); ctx.lineTo(0, -40);
-            ctx.moveTo(-75, -90); ctx.lineTo(-40, -10); ctx.lineTo(0, 15);
-            ctx.moveTo(75, -90); ctx.lineTo(40, -10); ctx.lineTo(0, 15);
-            ctx.moveTo(-32, 68); ctx.lineTo(0, 15); ctx.lineTo(32, 68);
-            ctx.stroke();
-
-            // 4. Warm Orange/Golden Luminous Central Core (Visual Focal Point)
-            const corePulse = Math.sin(time * 2.5) * 0.12 + 0.88;
-            const coreGrad = ctx.createRadialGradient(0, -35, 6, 0, -35, 95);
-            coreGrad.addColorStop(0, `rgba(255, 240, 200, ${1.0 * glow})`);
-            coreGrad.addColorStop(0.2, `rgba(255, 175, 20, ${0.95 * glow * corePulse})`);
-            coreGrad.addColorStop(0.55, `rgba(255, 100, 0, ${0.65 * glow * corePulse})`);
-            coreGrad.addColorStop(0.85, `rgba(255, 60, 0, ${0.25 * glow})`);
-            coreGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-
-            ctx.shadowColor = '#ff8800';
-            ctx.shadowBlur = 45 * glow * corePulse;
-            ctx.fillStyle = coreGrad;
-            ctx.beginPath();
-            ctx.arc(0, -35, 95, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Internal Neural Activity Lines
-            ctx.shadowBlur = 6;
-            ctx.shadowColor = '#ffaa00';
-            for (let n of neuralLines) {
-                const a = Math.sin(time * 3 + n.speed * 100) * 0.5 + 0.5;
-                ctx.strokeStyle = `rgba(255, 200, 80, ${n.alpha * a * glow})`;
-                ctx.lineWidth = 1.0;
-                ctx.beginPath();
-                ctx.moveTo(n.x1, n.y1);
-                ctx.lineTo(n.x2, n.y2);
-                ctx.stroke();
+                    ctx.strokeStyle = `rgba(0, 196, 255, ${ringAlpha})`;
+                    ctx.lineWidth = 1.2;
+                    ctx.beginPath();
+                    ctx.arc(0, -45, currentRadius, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
             }
 
-            // 5. Floating Cybernetic Particles
-            for (let p of particles) {
-                p.x += p.vx;
-                p.y += p.vy;
-                if (p.y < -220) p.y = 200;
-                if (p.x < -180) p.x = 180;
-                if (p.x > 180) p.x = -180;
+            // --- LAYER 2: Face Wave-Stack Glow & Radial Cognitive Core ---
+            if (bootProgress > 0.3) {
+                const corePulse = Math.sin((time * Math.PI * 2) / smoothedPulsePeriod) * smoothedPulseAmp + 1.0;
+                const reactiveAmp = (runtimeState === 'SPEAKING') ? audioRms * 0.35 : 0.0;
+                const totalGlow = (corePulse + reactiveAmp) * bootProgress;
 
-                ctx.shadowBlur = p.isCore ? 12 : 6;
-                ctx.shadowColor = p.isCore ? '#ff9900' : '#00e5ff';
-                ctx.fillStyle = p.isCore 
-                    ? `rgba(255, 170, 40, ${p.alpha * glow})` 
-                    : `rgba(0, 229, 255, ${p.alpha * cyanAct})`;
+                // Horizontal Wave-Stack Glow in Face Region
+                const stackBands = 7;
+                for (let b = 0; b < stackBands; b++) {
+                    const bandY = -95 + b * 16;
+                    const bandWidth = 65 * Math.sin((b / (stackBands - 1)) * Math.PI) + 10;
+                    const bandAlpha = (0.35 + 0.15 * Math.sin(time * 3 + b)) * totalGlow;
+
+                    const bandGrad = ctx.createLinearGradient(-bandWidth, bandY, bandWidth, bandY);
+                    bandGrad.addColorStop(0, 'rgba(255, 137, 0, 0)');
+                    bandGrad.addColorStop(0.25, `rgba(255, 210, 77, ${bandAlpha * 0.7})`);
+                    bandGrad.addColorStop(0.5, `rgba(255, 255, 255, ${bandAlpha * 0.95})`);
+                    bandGrad.addColorStop(0.75, `rgba(255, 210, 77, ${bandAlpha * 0.7})`);
+                    bandGrad.addColorStop(1, 'rgba(255, 137, 0, 0)');
+
+                    ctx.fillStyle = bandGrad;
+                    ctx.fillRect(-bandWidth, bandY - 3, bandWidth * 2, 6);
+                }
+
+                // Central Radial Core Glow (White -> Gold -> Orange)
+                const coreGrad = ctx.createRadialGradient(0, -45, 4, 0, -45, 85);
+                coreGrad.addColorStop(0, `rgba(255, 255, 255, ${0.95 * totalGlow})`);
+                coreGrad.addColorStop(0.22, `rgba(255, 210, 77, ${0.85 * totalGlow})`);
+                coreGrad.addColorStop(0.55, `rgba(255, 137, 0, ${0.45 * totalGlow})`);
+                coreGrad.addColorStop(0.85, `rgba(255, 137, 0, ${0.12 * totalGlow})`);
+                coreGrad.addColorStop(1, 'rgba(14, 14, 20, 0)');
+
+                ctx.shadowColor = COLOR_CORE_ORANGE;
+                ctx.shadowBlur = 32 * totalGlow;
+                ctx.fillStyle = coreGrad;
                 ctx.beginPath();
-                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.arc(0, -45, 85, 0, Math.PI * 2);
                 ctx.fill();
+                ctx.shadowBlur = 0;
+
+                // Two Gold Neck Streaks running to bottom origin point
+                ctx.strokeStyle = `rgba(255, 137, 0, ${0.65 * totalGlow})`;
+                ctx.lineWidth = 2.0;
+                ctx.shadowColor = COLOR_CORE_ORANGE;
+                ctx.shadowBlur = 10;
+
+                ctx.beginPath();
+                ctx.moveTo(-16, 60); ctx.lineTo(0, 175);
+                ctx.moveTo(16, 60); ctx.lineTo(0, 175);
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+            }
+
+            // --- LAYER 3: Precomputed 2,000 Particle Bust Silhouette ---
+            const idleJitter = (runtimeState === 'LISTENING' || runtimeState === 'IDLE') ? 1.2 : 2.2;
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const tx = targetPositions[i * 2];
+                const ty = targetPositions[i * 2 + 1];
+                const sx = scatterPositions[i * 2];
+                const sy = scatterPositions[i * 2 + 1];
+                const type = particleMeta[i * 3];
+                const baseAlpha = particleMeta[i * 3 + 1];
+                const delay = particleMeta[i * 3 + 2];
+
+                let px, py, alpha;
+                if (bootProgress < 1.0) {
+                    const particleT = Math.max(0, Math.min(1.0, (elapsedBoot - delay) / (BOOT_DURATION_MS - 800)));
+                    const ease = particleT < 0.5 ? 4 * particleT * particleT * particleT : 1 - Math.pow(-2 * particleT + 2, 3) / 2;
+                    px = sx + (tx - sx) * ease;
+                    py = sy + (ty - sy) * ease;
+                    alpha = baseAlpha * ease;
+                } else {
+                    const jx = Math.sin(time * 3 + i) * idleJitter;
+                    const jy = Math.cos(time * 2.5 + i * 1.5) * idleJitter;
+                    px = tx + jx;
+                    py = ty + jy;
+                    alpha = baseAlpha;
+                }
+
+                const isBright = (type === 0);
+                ctx.fillStyle = isBright 
+                    ? `rgba(0, 196, 255, ${alpha})` 
+                    : `rgba(58, 168, 216, ${alpha * 0.55})`;
+
+                ctx.fillRect(px - 0.8, py - 0.8, 1.6, 1.6);
             }
 
             ctx.restore();
+            requestAnimationFrame(render);
         }
+        requestAnimationFrame(render);
 
-        function animate() {
-            time += 0.016;
-            ctx.clearRect(0, 0, width, height);
-
-            const cx = width / 2;
-            const cy = height / 2 + (width < 768 ? -20 : -10);
-            const scale = Math.min(width / 750, height / 850) * 1.15;
-
-            drawCyberneticHumanoid(cx, cy, Math.max(0.65, scale));
-            requestAnimationFrame(animate);
-        }
-
-        // Live Telemetry Polling and Interaction
-        async function fetchUIState() {
+        // --- 4. Live Telemetry Polling & State Synchronization ---
+        async function syncState() {
             try {
                 const res = await fetch('/api/state');
                 if (res.ok) {
                     const data = await res.json();
-                    uiState = data;
-                    
-                    // Update HUD elements
-                    const badge = document.getElementById('uiStateBadge');
-                    badge.innerText = data.runtime_state || 'IDLE';
-                    badge.className = 'state-badge ' + (data.runtime_state.toLowerCase());
-                    
-                    document.getElementById('coreFreq').innerText = (data.neural_pulse_rate || 1.2).toFixed(2);
-                    document.getElementById('confVal').innerText = ((data.confidence || 0.95) * 100).toFixed(1) + '%';
-                    document.getElementById('matVal').innerText = data.development_state ? data.development_state.replace('Maturity: ', '') : 'L6_META_LEARNING';
-                    
-                    document.getElementById('activeGoal').innerText = data.active_goal || 'Continuous Discovery';
-                    if (data.explanation_chain && data.explanation_chain[0]) {
-                        document.getElementById('activeStrategy').innerText = data.explanation_chain[0];
-                    }
+                    runtimeState = data.runtime_state || 'IDLE';
+
+                    const statusLabel = document.getElementById('statusLabel');
+                    statusLabel.innerText = data.state_label || runtimeState;
+                    statusLabel.className = 'status-badge ' + runtimeState.toLowerCase();
+
+                    document.getElementById('objectiveText').innerText = data.active_goal || 'Continuous Discovery';
+                    document.getElementById('strategyText').innerText = 'STRATEGY: ' + (data.current_strategy || 'AdversarialInvariantDefense');
+                    document.getElementById('confVal').innerText = Math.round((data.confidence || 0.95) * 100) + '%';
+                    document.getElementById('accelVal').innerText = data.learning_acceleration || '2.57X';
 
                     if (data.resource_state) {
-                        document.getElementById('cpuVal').innerText = data.resource_state.cpu_percent + '%';
-                        document.getElementById('memVal').innerText = data.resource_state.memory_mb + 'MB';
+                        document.getElementById('hostTele').innerText = `${data.resource_state.cpu_percent}% CPU`;
                     }
+
+                    currentPulsePeriod = data.core_pulse_period_s || 2.0;
+                    currentPulseAmp = data.core_pulse_amplitude || 0.12;
+                    audioRms = data.audio_amplitude_rms || 0.0;
                 }
-            } catch (e) {
-                // Offline fallback representation
-            }
+            } catch (e) {}
         }
+        setInterval(syncState, 1500);
 
-        // Action Handlers
+        // --- 5. Interactive Action Handlers ---
         document.getElementById('btnFlywheel').addEventListener('click', async () => {
-            const badge = document.getElementById('uiStateBadge');
-            badge.innerText = 'DEVELOPING';
-            badge.className = 'state-badge developing';
-            uiState.core_glow_intensity = 1.0;
-            uiState.neural_pulse_rate = 2.5;
-
+            currentPulseAmp = 0.25;
+            currentPulsePeriod = 0.85;
             try {
-                const res = await fetch('/api/cycle', { method: 'POST' });
-                await fetchUIState();
-            } catch (e) {
-                console.error(e);
-            }
+                await fetch('/api/cycle', { method: 'POST' });
+                await syncState();
+            } catch (e) {}
         });
 
-        document.getElementById('btnGenome').addEventListener('click', async () => {
-            alert("Cognitive Genome (v2): 22 Active Dimensions\nReasoning Depth: 3\nVerification Ratio: 85%\nLearning Acceleration: 2.57x\nActive Phenotypes: Coding, Research, Debugging, Security");
+        let speakingSim = false;
+        document.getElementById('btnSpeak').addEventListener('click', () => {
+            speakingSim = !speakingSim;
+            if (speakingSim) {
+                runtimeState = 'SPEAKING';
+                currentPulsePeriod = 0.75;
+                currentPulseAmp = 0.28;
+                audioRms = 0.85;
+                document.getElementById('statusLabel').innerText = 'SPEAKING';
+                document.getElementById('statusLabel').className = 'status-badge speaking';
+            } else {
+                runtimeState = 'IDLE';
+                currentPulsePeriod = 2.0;
+                currentPulseAmp = 0.12;
+                audioRms = 0.0;
+                document.getElementById('statusLabel').innerText = 'IDLE';
+                document.getElementById('statusLabel').className = 'status-badge';
+            }
         });
 
         document.getElementById('btnIntrospect').addEventListener('click', async () => {
@@ -514,12 +596,9 @@
             alert(`Level 7 Introspection:\nQuestion: ${data.question}\nAcceleration: ${data.current_learning_acceleration}\nOptimization: ${data.meta_learning_optimization}`);
         });
 
-        // Initialize
-        resize();
-        initParticles();
-        animate();
-        setInterval(fetchUIState, 2000);
-        fetchUIState();
+        document.getElementById('hudControl').addEventListener('click', () => {
+            alert("ZERION-X GENESIS (9:16 Portrait)\n- Canonical Aspect Ratio: 9:16 (0.5625)\n- Substrate State: Operational\n- Autonomy: AUTONOMOUS_SAFE\n- Port: 8080 (0.0.0.0)");
+        });
     </script>
 </body>
 </html>
