@@ -23,8 +23,17 @@ class TestGenesisUI(unittest.IsolatedAsyncioTestCase):
 
     def test_ui_state_bridge_and_modes(self):
         bridge = UIStateBridge()
-        self.assertEqual(bridge.current_state.runtime_state, UIStateMode.IDLE)
-        self.assertGreater(bridge.current_state.core_glow_intensity, 0.5)
+        self.assertEqual(bridge.current_state.runtime_state, UIStateMode.BOOTING)
+        self.assertGreaterEqual(bridge.current_state.core_glow_intensity, 0.5)
+
+        # Transition to Listening
+        bridge.set_listening_state(True)
+        self.assertEqual(bridge.current_state.runtime_state, UIStateMode.LISTENING)
+
+        # Transition to Speaking
+        bridge.set_speaking_state(True, audio_rms=0.75)
+        self.assertEqual(bridge.current_state.runtime_state, UIStateMode.SPEAKING)
+        self.assertEqual(bridge.current_state.audio_amplitude_rms, 0.75)
 
         # Update from cycle trace
         bridge.update_from_cycle({

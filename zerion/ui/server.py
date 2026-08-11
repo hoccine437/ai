@@ -173,6 +173,41 @@ class GenesisWebServer:
                 mis = self.engine.missions.create_mission("Autonomous Genesis Exploration")
                 self._send_response(writer, 200, "application/json", json.dumps(mis.to_dict()).encode("utf-8"))
 
+            elif method == "POST" and path == "/api/voice/process":
+                payload = json.loads(body_bytes.decode(errors="replace") or "{}")
+                transcript = payload.get("transcript", "")
+                turn = await self.engine.voice_pipeline.process_speech_input(transcript)
+                res = {
+                    "turn_id": turn.turn_id,
+                    "wake_detected": turn.wake_result.detected,
+                    "matched_phrase": turn.wake_result.matched_phrase,
+                    "cleaned_command": turn.wake_result.cleaned_command,
+                    "cognitive_response": turn.cognitive_response,
+                    "tool_executed": turn.tool_executed,
+                    "latency_ms": turn.total_latency_ms
+                }
+                self._send_response(writer, 200, "application/json", json.dumps(res).encode("utf-8"))
+
+            elif method == "POST" and path == "/api/voice/audio-rms":
+                payload = json.loads(body_bytes.decode(errors="replace") or "{}")
+                rms = float(payload.get("rms", 0.0))
+                await self.engine.voice_pipeline.handle_audio_frame(rms)
+                self._send_response(writer, 200, "application/json", b'{"status": "OK"}')
+
+            elif method == "POST" and path == "/api/voice/interrupt":
+                self.engine.voice_pipeline.interrupt_speech()
+                self._send_response(writer, 200, "application/json", b'{"status": "INTERRUPTED"}')
+
+            elif method == "GET" and path == "/api/voice/session":
+                sess = self.engine.voice_pipeline.session_mgr.create_ephemeral_session()
+                res = {
+                    "session_id": sess.session_id,
+                    "is_authenticated": sess.is_authenticated,
+                    "mode": sess.mode,
+                    "expires_at": sess.expires_at
+                }
+                self._send_response(writer, 200, "application/json", json.dumps(res).encode("utf-8"))
+
             elif method == "GET" and path.startswith("/api/level/"):
                 lvl_str = path.replace("/api/level/", "")
                 try:

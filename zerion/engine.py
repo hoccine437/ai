@@ -99,6 +99,7 @@ from zerion.benchmarks.runner import BenchmarkRunner
 from zerion.benchmarks.scoreboard import DevelopmentalScoreboard
 from zerion.benchmarks.anti_gaming import AntiGamingDetector
 from zerion.ui.state_bridge import UIStateBridge
+from zerion.voice.pipeline import VoiceFirstInteractionPipeline
 from zerion.cognitive_os.organism import CognitiveOrganism, OrganismCycleResult
 from zerion.cognitive_os.objective_manager import ObjectiveContinuityManager
 from zerion.evolution.timeline import DevelopmentTimelineManager, DevelopmentSnapshot
@@ -214,6 +215,7 @@ class AscendantEngine:
         self.scoreboard = DevelopmentalScoreboard()
         self.anti_gaming = AntiGamingDetector()
         self.ui_bridge = UIStateBridge()
+        self.voice_pipeline = VoiceFirstInteractionPipeline(engine_ref=self, ui_bridge=self.ui_bridge)
 
         # 13. Cognitive OS & Autonomous Organism
         self.organism = CognitiveOrganism(data_dir=str(self.data_dir))
