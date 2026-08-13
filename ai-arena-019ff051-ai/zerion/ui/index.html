@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>ZERION-X — GENESIS (Voice-First 9:16)</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+            font-family: "SF Mono", "Roboto Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
+
+        body, html {
+            width: 100%;
+            height: 100%;
+            background-color: #050508;
+            color: #4FD6FF;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* 
+           Canonical 9:16 Portrait Smartphone Frame Container.
+           On smartphones: fills 100% of the portrait viewport.
+           On desktop/tablets: neatly centered in a canonical 9:16 smartphone enclosure.
+        */
+        #phone-viewport {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            max-width: calc(100vh * (9 / 16));
+            max-height: 100vh;
+            aspect-ratio: 9 / 16;
+            background-color: #0E0E14;
+            overflow: hidden;
+            box-shadow: 0 0 50px rgba(0, 0, 0, 0.9), 0 0 1px rgba(0, 196, 255, 0.2);
+        }
+
+        @media (max-aspect-ratio: 9/16) {
+            #phone-viewport {
+                width: 100vw;
+                height: 100vh;
+                max-width: 100vw;
+                aspect-ratio: unset;
+            }
+        }
+
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Subtle Ambient Textures & Vignette */
+        .ambient-grid {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(rgba(0, 196, 255, 0.015) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 196, 255, 0.015) 1px, transparent 1px);
+            background-size: 24px 24px;
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        .scanlines {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(
+                rgba(14, 14, 20, 0) 50%, 
+                rgba(0, 0, 0, 0.3) 50%
+            );
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 3;
+            opacity: 0.55;
+        }
+
+        .vignette {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            box-shadow: inset 0 0 120px rgba(10, 10, 16, 0.95);
+            pointer-events: none;
+            z-index: 4;
+        }
+
+        /* Safe Area and Micro-HUD Layout */
+        .hud-control-btn {
+            position: absolute;
+            top: calc(env(safe-area-inset-top, 0px) + 16px);
+            left: 16px;
+            width: 56px;
+            height: 28px;
+            border-radius: 8px;
+            border: 1px solid rgba(58, 168, 216, 0.7);
+            background: rgba(14, 14, 20, 0.7);
+            color: #3AA8D8;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 10;
+            backdrop-filter: blur(8px);
+            transition: all 0.2s ease;
+        }
+
+        .hud-control-btn:hover {
+            border-color: #00C4FF;
+            color: #00C4FF;
+            box-shadow: 0 0 12px rgba(0, 196, 255, 0.35);
+        }
+
+        .hud-top-right {
+            position: absolute;
+            top: calc(env(safe-area-inset-top, 0px) + 16px);
+            right: 16px;
+            z-index: 10;
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            color: #4FD6FF;
+            text-align: right;
+            line-height: 1.4;
+            text-transform: uppercase;
+        }
+
+        .hud-bottom-left {
+            position: absolute;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
+            left: 16px;
+            z-index: 10;
+            font-size: 10.5px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            color: #4FD6FF;
+            line-height: 1.4;
+            max-width: 75%;
+            pointer-events: none;
+        }
+
+        .hud-bottom-right {
+            position: absolute;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
+            right: 16px;
+            z-index: 10;
+            font-size: 10.5px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            color: #4FD6FF;
+            text-align: right;
+            line-height: 1.4;
+        }
+
+        .status-badge {
+            display: inline-block;
+            color: #4FD6FF;
+            transition: color 0.15s ease-out;
+        }
+
+        .status-badge.booting {
+            color: #FFD24D;
+        }
+
+        .status-badge.listening {
+            color: #00C4FF;
+            text-shadow: 0 0 8px rgba(0, 196, 255, 0.6);
+        }
+
+        .status-badge.speaking {
+            color: #FF8900;
+            text-shadow: 0 0 8px rgba(255, 137, 0, 0.6);
+        }
+
+        .status-badge.error {
+            color: #FF3B30;
+            text-shadow: 0 0 8px rgba(255, 59, 48, 0.6);
+        }
+
+        .status-badge.degraded {
+            color: #FF8900;
+            text-shadow: 0 0 8px rgba(255, 137, 0, 0.6);
+        }
+
+        /* Voice-First Live Audio Reactive Waveform */
+        .voice-indicator {
+            position: absolute;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 65px);
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 15;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            height: 20px;
+            pointer-events: none;
+            opacity: 0.8;
+        }
+
+        .audio-bar {
+            width: 3px;
+            height: 4px;
+            background: #00C4FF;
+            border-radius: 2px;
+            transition: height 0.05s ease;
+        }
+
+        /* Contextual Action Triggers (Mobile-Friendly Thumb Zone) */
+        .context-tray {
+            position: absolute;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 20;
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+        }
+
+        .tray-btn {
+            background: rgba(14, 14, 20, 0.85);
+            border: 1px solid rgba(58, 168, 216, 0.5);
+            color: #4FD6FF;
+            padding: 6px 12px;
+            font-size: 9.5px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            border-radius: 4px;
+            backdrop-filter: blur(10px);
+            transition: all 0.2s ease;
+        }
+
+        .tray-btn:hover {
+            border-color: #00C4FF;
+            color: #00C4FF;
+            box-shadow: 0 0 10px rgba(0, 196, 255, 0.3);
+        }
+
+        /* Cognitive Core Panel — renders the real Slice 1 CognitiveState document */
+        .cognitive-panel {
+            position: absolute;
+            top: calc(env(safe-area-inset-top, 0px) + 56px);
+            right: 12px;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 150px);
+            width: 72%;
+            max-width: 320px;
+            z-index: 30;
+            background: rgba(10, 12, 18, 0.92);
+            border: 1px solid rgba(58, 168, 216, 0.55);
+            border-radius: 10px;
+            backdrop-filter: blur(12px);
+            box-shadow: 0 0 24px rgba(0, 196, 255, 0.18), inset 0 0 30px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .cognitive-panel.hidden {
+            display: none;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            border-bottom: 1px solid rgba(58, 168, 216, 0.35);
+            background: rgba(14, 20, 30, 0.6);
+            font-size: 9.5px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            color: #4FD6FF;
+            text-transform: uppercase;
+            flex-shrink: 0;
+        }
+
+        .panel-close {
+            cursor: pointer;
+            color: #3AA8D8;
+            font-size: 13px;
+            line-height: 1;
+            padding: 0 2px;
+        }
+
+        .panel-close:hover {
+            color: #FF3B30;
+        }
+
+        .panel-body {
+            padding: 8px 10px;
+            overflow-y: auto;
+            font-size: 9.5px;
+            line-height: 1.5;
+            color: #7FD8F5;
+        }
+
+        .panel-body::-webkit-scrollbar {
+            width: 3px;
+        }
+
+        .panel-body::-webkit-scrollbar-thumb {
+            background: rgba(0, 196, 255, 0.35);
+            border-radius: 2px;
+        }
+
+        .cog-section {
+            margin-bottom: 8px;
+        }
+
+        .cog-section-title {
+            color: #FFD24D;
+            font-size: 8.5px;
+            font-weight: 600;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin-bottom: 2px;
+            border-bottom: 1px dotted rgba(255, 210, 77, 0.25);
+            padding-bottom: 1px;
+        }
+
+        .cog-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .cog-row .cog-label {
+            color: rgba(127, 216, 245, 0.75);
+            flex-shrink: 0;
+        }
+
+        .cog-row .cog-value {
+            color: #FFFFFF;
+            text-align: right;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .cog-value.bad {
+            color: #FF3B30;
+        }
+
+        .cog-value.warn {
+            color: #FF8900;
+        }
+
+        .cog-value.good {
+            color: #00C4FF;
+        }
+
+        .cog-focus {
+            color: #FFFFFF;
+            font-size: 10px;
+            word-break: break-word;
+            line-height: 1.4;
+        }
+
+        .cog-status-line {
+            color: #4FD6FF;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+
+        .cog-status-line .dot {
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            margin-right: 6px;
+            background: #00C4FF;
+            box-shadow: 0 0 6px rgba(0, 196, 255, 0.8);
+            animation: cogPulse 1.6s ease-in-out infinite;
+        }
+
+        .cog-status-line .dot.stop {
+            background: #3AA8D8;
+            animation: none;
+            box-shadow: none;
+        }
+
+        .cog-status-line .dot.error {
+            background: #FF3B30;
+            box-shadow: 0 0 6px rgba(255, 59, 48, 0.8);
+        }
+
+        .cog-status-line .dot.recover {
+            background: #FF8900;
+            box-shadow: 0 0 6px rgba(255, 137, 0, 0.8);
+        }
+
+        @keyframes cogPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.35; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Canonical 9:16 Portrait Enclosure -->
+    <div id="phone-viewport">
+        <div id="canvas-container">
+            <canvas id="zerionCanvas"></canvas>
+        </div>
+        
+        <div class="ambient-grid"></div>
+        <div class="scanlines"></div>
+        <div class="vignette"></div>
+
+        <!-- HUD Control (Top-Start, 56x28dp, 8dp radius, 16dp inset) -->
+        <div class="hud-control-btn" id="hudControl">HUD</div>
+
+        <!-- Top-Right Telemetry & Voice State -->
+        <div class="hud-top-right">
+            <div>STATUS: <span id="statusLabel" class="status-badge booting">ASSEMBLING… 0%</span></div>
+            <div style="font-size: 9.5px; opacity: 0.7; margin-top: 2px;">WAKE: "ZERION" • <span id="confVal">UNKNOWN</span></div>
+            <div style="font-size: 9.5px; opacity: 0.7; margin-top: 2px;">MIC: <span id="micVal" style="color: #3AA8D8;">—</span></div>
+        </div>
+
+        <!-- Voice Reactive Waveform Indicator -->
+        <div class="voice-indicator" id="voiceIndicator">
+            <div class="audio-bar" id="b1"></div>
+            <div class="audio-bar" id="b2"></div>
+            <div class="audio-bar" id="b3"></div>
+            <div class="audio-bar" id="b4"></div>
+            <div class="audio-bar" id="b5"></div>
+        </div>
+
+        <!-- Bottom-Left Active Objective & Voice Speech Output -->
+        <div class="hud-bottom-left">
+            <div style="color: #FFD24D; font-size: 9.5px; font-weight: 600;">ACTIVE OBJECTIVE</div>
+            <div id="objectiveText" style="color: #FFFFFF; font-size: 10.5px; margin-bottom: 2px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">UNKNOWN</div>
+            <div id="voiceFeedback" style="font-size: 9.5px; color: #00C4FF; opacity: 0.85;">VOICE: Say "Hey Zerion" to interact</div>
+        </div>
+
+        <!-- Bottom-Right Hardware & Learning Telemetry -->
+        <div class="hud-bottom-right">
+            <div><span id="hostTele">UNKNOWN CPU</span></div>
+            <div style="font-size: 9.5px; opacity: 0.7;">ACCEL: <span id="accelVal" style="color: #00C4FF;">UNKNOWN</span></div>
+        </div>
+
+        <!-- Secondary Contextual Voice Triggers & Controlled Commands -->
+        <div class="context-tray">
+            <button class="tray-btn" id="btnMicToggle">🎙️ Enable Mic</button>
+            <button class="tray-btn" id="btnSimWake">Say "Hey Zerion"</button>
+            <button class="tray-btn" id="btnSimTask">Voice: "Open Tasks"</button>
+            <button class="tray-btn" id="btnPulse">Pulse: Pause</button>
+            <button class="tray-btn" id="btnOffline">Offline: AUTO</button>
+        </div>
+
+        <!-- Cognitive Core Panel — live Slice 1 CognitiveState, toggled by HUD -->
+        <div class="cognitive-panel hidden" id="cognitivePanel">
+            <div class="panel-header">
+                <span>COGNITIVE CORE</span>
+                <span class="panel-close" id="panelClose" title="Close">✕</span>
+            </div>
+            <div class="panel-body" id="cognitiveBody">LOADING…</div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. Canonical 9:16 Portrait Canvas Setup & Particle Field ---
+        const canvas = document.getElementById('zerionCanvas');
+        const container = document.getElementById('phone-viewport');
+        const ctx = canvas.getContext('2d');
+
+        let width, height, dpr;
+        let time = 0;
+        let bootStartTime = Date.now();
+        const BOOT_DURATION_MS = 5800;
+
+        const PARTICLE_COUNT = 2000;
+        const targetPositions = new Float32Array(PARTICLE_COUNT * 2);
+        const scatterPositions = new Float32Array(PARTICLE_COUNT * 2);
+        const particleMeta = new Float32Array(PARTICLE_COUNT * 3);    // [type, baseAlpha, delay]
+        
+        // Exact official color tokens
+        const COLOR_BG = '#0E0E14';
+        const COLOR_CYAN_BRIGHT = '#00C4FF';
+        const COLOR_CYAN_DIM = '#3AA8D8';
+        const COLOR_CORE_WHITE = '#FFFFFF';
+        const COLOR_CORE_GOLD = '#FFD24D';
+        const COLOR_CORE_ORANGE = '#FF8900';
+        const COLOR_SPINE_DARK = '#3A2A10';
+        const COLOR_STATUS_TEXT = '#4FD6FF';
+
+        // Precompute Bust Silhouette Target Points Once (Zero per-frame allocation)
+        function precomputeSilhouette() {
+            let seed = 42;
+            function rand() {
+                seed = (seed * 9301 + 49297) % 233280;
+                return seed / 233280;
+            }
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const ratio = i / PARTICLE_COUNT;
+                let tx, ty, type, alpha, delay;
+
+                // Layer A: Head & Neck Flow Lines (40%)
+                if (ratio < 0.40) {
+                    type = 0; // Contour
+                    alpha = 0.85;
+                    const angle = (i / (PARTICLE_COUNT * 0.40)) * Math.PI * 2;
+                    const rx = 80 * (1.0 - 0.12 * Math.abs(Math.sin(angle)));
+                    const ry = 110;
+                    tx = rx * Math.cos(angle);
+                    ty = ry * Math.sin(angle) - 45;
+                }
+                // Layer B: Shoulders & Neck Ribs (25%)
+                else if (ratio < 0.65) {
+                    type = 1; // Shoulder / Spine
+                    alpha = 0.70;
+                    const subT = (ratio - 0.40) / 0.25;
+                    const side = (i % 2 === 0) ? -1 : 1;
+                    tx = side * (22 + 160 * subT);
+                    ty = 75 + 115 * subT;
+                }
+                // Layer C: Crown Density & Scattered Points (35%)
+                else {
+                    type = 2; // Scatter / Crown
+                    const isCrown = rand() < 0.65;
+                    if (isCrown) {
+                        const angle = rand() * Math.PI + Math.PI;
+                        const r = rand() * 90;
+                        tx = r * Math.cos(angle);
+                        ty = r * Math.sin(angle) * 0.7 - 105;
+                        alpha = rand() * 0.35 + 0.45;
+                    } else {
+                        const angle = rand() * Math.PI * 2;
+                        const r = rand() * 180;
+                        tx = r * Math.cos(angle);
+                        ty = r * Math.sin(angle) * 0.85 - 25;
+                        alpha = rand() * 0.30 + 0.20;
+                    }
+                }
+
+                // Scatter coordinates for boot burst (diagonal upward sweep)
+                const sAngle = rand() * Math.PI * 2;
+                const sDist = rand() * 400 + 120;
+                const sx = sDist * Math.cos(sAngle);
+                const sy = sDist * Math.sin(sAngle) - 220;
+                delay = rand() * 350 + 50;
+
+                targetPositions[i * 2] = tx;
+                targetPositions[i * 2 + 1] = ty;
+                scatterPositions[i * 2] = sx;
+                scatterPositions[i * 2 + 1] = sy;
+                particleMeta[i * 3] = type;
+                particleMeta[i * 3 + 1] = alpha;
+                particleMeta[i * 3 + 2] = delay;
+            }
+        }
+        precomputeSilhouette();
+
+        function resize() {
+            dpr = window.devicePixelRatio || 1;
+            const rect = container.getBoundingClientRect();
+            width = rect.width;
+            height = rect.height;
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            ctx.scale(dpr, dpr);
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // --- 2. Live Runtime State & Animation Variables ---
+        let runtimeState = 'BOOTING';
+        let currentPulsePeriod = 2.0;
+        let currentPulseAmp = 0.12;
+        let audioRms = 0.0;
+
+        let smoothedPulseAmp = 0.12;
+        let smoothedPulsePeriod = 2.0;
+
+        // --- 3. 9:16 Portrait Bounded Render Draw Loop ---
+        function render() {
+            time += 0.016;
+            ctx.clearRect(0, 0, width, height);
+
+            const elapsedBoot = Date.now() - bootStartTime;
+            const bootProgress = Math.min(1.0, elapsedBoot / BOOT_DURATION_MS);
+
+            // Interpolate pulse parameters
+            smoothedPulseAmp += (currentPulseAmp - smoothedPulseAmp) * 0.08;
+            smoothedPulsePeriod += (currentPulsePeriod - smoothedPulsePeriod) * 0.08;
+
+            const cx = width / 2;
+            const cy = height * 0.42;
+            const scale = Math.min(width / 380, height / 680) * 0.96;
+
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.scale(scale, scale);
+
+            // --- LAYER 1: Concentric Ripple Rings Sub-layer (Head Centered) ---
+            if (bootProgress >= 0.85) {
+                const ringAlphaMax = (runtimeState === 'LISTENING') ? 0.65 : 0.40;
+                const ringCycleDuration = (runtimeState === 'LISTENING') ? 2200 : 2800;
+                for (let r = 0; r < 3; r++) {
+                    const ringOffset = r * 900;
+                    const ringElapsed = (Date.now() + ringOffset) % ringCycleDuration;
+                    const ringProgress = ringElapsed / ringCycleDuration;
+                    const currentRadius = ringProgress * 185;
+                    const ringAlpha = (1.0 - ringProgress) * ringAlphaMax;
+
+                    ctx.strokeStyle = `rgba(0, 196, 255, ${ringAlpha})`;
+                    ctx.lineWidth = 1.2;
+                    ctx.beginPath();
+                    ctx.arc(0, -45, currentRadius, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+            }
+
+            // --- LAYER 2: Face Wave-Stack Glow & Radial Cognitive Core ---
+            if (bootProgress > 0.3) {
+                const corePulse = Math.sin((time * Math.PI * 2) / smoothedPulsePeriod) * smoothedPulseAmp + 1.0;
+                const reactiveAmp = (runtimeState === 'SPEAKING' || runtimeState === 'LISTENING') ? audioRms * 0.45 : 0.0;
+                const totalGlow = (corePulse + reactiveAmp) * bootProgress;
+
+                // Horizontal Wave-Stack Glow in Face Region
+                const stackBands = 7;
+                for (let b = 0; b < stackBands; b++) {
+                    const bandY = -95 + b * 16;
+                    const bandWidth = 65 * Math.sin((b / (stackBands - 1)) * Math.PI) + 10;
+                    const bandAlpha = (0.35 + 0.15 * Math.sin(time * 3 + b)) * totalGlow;
+
+                    const bandGrad = ctx.createLinearGradient(-bandWidth, bandY, bandWidth, bandY);
+                    bandGrad.addColorStop(0, 'rgba(255, 137, 0, 0)');
+                    bandGrad.addColorStop(0.25, `rgba(255, 210, 77, ${bandAlpha * 0.7})`);
+                    bandGrad.addColorStop(0.5, `rgba(255, 255, 255, ${bandAlpha * 0.95})`);
+                    bandGrad.addColorStop(0.75, `rgba(255, 210, 77, ${bandAlpha * 0.7})`);
+                    bandGrad.addColorStop(1, 'rgba(255, 137, 0, 0)');
+
+                    ctx.fillStyle = bandGrad;
+                    ctx.fillRect(-bandWidth, bandY - 3, bandWidth * 2, 6);
+                }
+
+                // Central Radial Core Glow (White -> Gold -> Orange)
+                const coreGrad = ctx.createRadialGradient(0, -45, 4, 0, -45, 85);
+                coreGrad.addColorStop(0, `rgba(255, 255, 255, ${0.95 * totalGlow})`);
+                coreGrad.addColorStop(0.22, `rgba(255, 210, 77, ${0.85 * totalGlow})`);
+                coreGrad.addColorStop(0.55, `rgba(255, 137, 0, ${0.45 * totalGlow})`);
+                coreGrad.addColorStop(0.85, `rgba(255, 137, 0, ${0.12 * totalGlow})`);
+                coreGrad.addColorStop(1, 'rgba(14, 14, 20, 0)');
+
+                ctx.shadowColor = COLOR_CORE_ORANGE;
+                ctx.shadowBlur = (runtimeState === 'SPEAKING' ? 45 : 32) * totalGlow;
+                ctx.fillStyle = coreGrad;
+                ctx.beginPath();
+                ctx.arc(0, -45, 85, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+
+                // Two Gold Neck Streaks running to bottom origin point
+                ctx.strokeStyle = `rgba(255, 137, 0, ${0.65 * totalGlow})`;
+                ctx.lineWidth = 2.0;
+                ctx.shadowColor = COLOR_CORE_ORANGE;
+                ctx.shadowBlur = 10;
+
+                ctx.beginPath();
+                ctx.moveTo(-16, 60); ctx.lineTo(0, 175);
+                ctx.moveTo(16, 60); ctx.lineTo(0, 175);
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+            }
+
+            // --- LAYER 3: Precomputed 2,000 Particle Bust Silhouette ---
+            const idleJitter = (runtimeState === 'LISTENING' || runtimeState === 'IDLE') ? 1.2 : 2.2;
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const tx = targetPositions[i * 2];
+                const ty = targetPositions[i * 2 + 1];
+                const sx = scatterPositions[i * 2];
+                const sy = scatterPositions[i * 2 + 1];
+                const type = particleMeta[i * 3];
+                const baseAlpha = particleMeta[i * 3 + 1];
+                const delay = particleMeta[i * 3 + 2];
+
+                let px, py, alpha;
+                if (bootProgress < 1.0) {
+                    const particleT = Math.max(0, Math.min(1.0, (elapsedBoot - delay) / (BOOT_DURATION_MS - 800)));
+                    const ease = particleT < 0.5 ? 4 * particleT * particleT * particleT : 1 - Math.pow(-2 * particleT + 2, 3) / 2;
+                    px = sx + (tx - sx) * ease;
+                    py = sy + (ty - sy) * ease;
+                    alpha = baseAlpha * ease;
+                } else {
+                    const jx = Math.sin(time * 3 + i) * idleJitter;
+                    const jy = Math.cos(time * 2.5 + i * 1.5) * idleJitter;
+                    px = tx + jx;
+                    py = ty + jy;
+                    alpha = baseAlpha;
+                }
+
+                const isBright = (type === 0);
+                ctx.fillStyle = isBright 
+                    ? `rgba(0, 196, 255, ${alpha})` 
+                    : `rgba(58, 168, 216, ${alpha * 0.55})`;
+
+                ctx.fillRect(px - 0.8, py - 0.8, 1.6, 1.6);
+            }
+
+            ctx.restore();
+
+            // Update Voice Visual Waveform Bars
+            const bars = [document.getElementById('b1'), document.getElementById('b2'), document.getElementById('b3'), document.getElementById('b4'), document.getElementById('b5')];
+            const activeH = Math.max(4, Math.min(24, audioRms * 30));
+            bars.forEach((b, idx) => {
+                const h = (runtimeState === 'SPEAKING' || runtimeState === 'LISTENING') ? activeH * (0.6 + 0.4 * Math.sin(time * 10 + idx)) : 4;
+                b.style.height = h + 'px';
+                b.style.background = (runtimeState === 'SPEAKING') ? '#FF8900' : '#00C4FF';
+            });
+
+            requestAnimationFrame(render);
+        }
+        requestAnimationFrame(render);
+
+        // --- 4. Live Telemetry Polling & State Synchronization ---
+        // Real perception has precedence over presentation defaults for the HUD CPU readout.
+        let hasRealPerception = false;
+
+        async function syncState() {
+            try {
+                const res = await fetch('/api/state');
+                if (res.ok) {
+                    const data = await res.json();
+                    runtimeState = data.runtime_state || 'IDLE';
+
+                    const statusLabel = document.getElementById('statusLabel');
+                    statusLabel.innerText = data.state_label || runtimeState || 'UNKNOWN';
+                    statusLabel.className = 'status-badge ' + (runtimeState || 'idle').toLowerCase();
+
+                    // Honest rendering: UNKNOWN unless the runtime reported a value.
+                    document.getElementById('objectiveText').innerText =
+                        (data.active_goal && data.active_goal !== 'None') ? data.active_goal : 'UNKNOWN';
+                    document.getElementById('confVal').innerText =
+                        (data.confidence != null) ? Math.round(data.confidence * 100) + '%' : 'UNKNOWN';
+                    document.getElementById('accelVal').innerText =
+                        (data.learning_acceleration && data.learning_acceleration !== 'UNKNOWN')
+                            ? data.learning_acceleration : 'UNKNOWN';
+
+                    // Honest microphone readout (Slice 10.1): only ever the real
+                    // perception telemetry. LISTENING is shown ONLY when the voice
+                    // service confirms the mic pipeline is genuinely active.
+                    const micVal = document.getElementById('micVal');
+                    if (micVal && data.voice_perception) {
+                        const vp = data.voice_perception;
+                        micVal.innerText = vp.is_listening ? 'LISTENING' : (vp.mic_phase || 'UNKNOWN');
+                        micVal.style.color = vp.is_listening ? '#00C4FF' : '#FF8900';
+                        micVal.title = vp.reason ? ('Mic: ' + vp.reason) : '';
+                    }
+
+                    if (data.explanation_chain && data.explanation_chain[0]) {
+                        document.getElementById('voiceFeedback').innerText = data.explanation_chain[0];
+                    }
+
+                    if (data.resource_state && data.resource_state.cpu_percent != null && !hasRealPerception) {
+                        document.getElementById('hostTele').innerText = `${data.resource_state.cpu_percent}% CPU`;
+                    }
+
+                    currentPulsePeriod = data.core_pulse_period_s || 2.0;
+                    currentPulseAmp = data.core_pulse_amplitude || 0.12;
+                    if (data.audio_amplitude_rms > 0) {
+                        audioRms = data.audio_amplitude_rms;
+                    }
+                }
+            } catch (e) {}
+        }
+        setInterval(syncState, 1500);
+
+        // --- 4a. Real-time event stream (SSE) from the VisualizationStateAdapter ---
+        // Updates the HUD the moment a real runtime event lands — no polling of
+        // the whole runtime, and no fabricated state.
+        let lastEventLabel = '';
+        function attachEventStream() {
+            try {
+                const es = new EventSource('/api/stream');
+                es.onmessage = (e) => {
+                    try {
+                        const ev = JSON.parse(e.data);
+                        if (ev && ev.event_type) {
+                            lastEventLabel = `EVENT ${ev.event_type}${ev.count > 1 ? ' x' + ev.count : ''}`;
+                            const fb = document.getElementById('voiceFeedback');
+                            if (fb && !fb.innerText.startsWith('VOICE INPUT')) {
+                                fb.innerText = lastEventLabel;
+                            }
+                        }
+                        syncState();
+                        if (!document.getElementById('cognitivePanel').classList.contains('hidden')) {
+                            syncCognitive();
+                        }
+                    } catch (err) {}
+                };
+                es.onerror = () => {
+                    // EventSource auto-reconnects; show honest idle state meanwhile.
+                };
+            } catch (err) {}
+        }
+
+        // --- 4b. Cognitive Core Panel — renders the real Slice 1 CognitiveState ---
+        function esc(v) {
+            if (v === null || v === undefined) return '—';
+            return String(v).replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+
+        function cogRow(label, value, cls) {
+            return `<div class="cog-row"><span class="cog-label">${esc(label)}</span><span class="cog-value ${cls || ''}">${esc(value)}</span></div>`;
+        }
+
+        function cogSection(title, rowsHtml) {
+            return `<div class="cog-section"><div class="cog-section-title">${esc(title)}</div>${rowsHtml}</div>`;
+        }
+
+        const COG_STATUS_COLOR = {
+            RUNNING: 'good', PAUSED: 'warn', RECOVERING: 'warn',
+            ERROR: 'bad', STOPPED: 'stop', INITIALIZING: 'stop'
+        };
+
+        function cogFmtTime(secs) {
+            if (!secs) return '—';
+            try { return new Date(secs * 1000).toLocaleTimeString(); } catch (e) { return '—'; }
+        }
+
+        async function syncCognitive() {
+            try {
+                const res = await fetch('/api/cognitive-state');
+                if (!res.ok) return;
+                const s = await res.json();
+
+                // Real measured perception drives the HUD CPU readout once a cycle has run.
+                if (s.perception && s.perception.cpu_percent > 0) {
+                    hasRealPerception = true;
+                    const mem = s.perception.memory_mb ? ` • ${s.perception.memory_mb.toFixed(0)}MB` : '';
+                    document.getElementById('hostTele').innerText = `${s.perception.cpu_percent.toFixed(1)}% CPU${mem}`;
+                }
+
+                const status = s.runtime_status || 'UNKNOWN';
+                const dotCls = status === 'ERROR' ? 'error' : (status === 'RECOVERING' ? 'recover' : (status === 'RUNNING' ? '' : 'stop'));
+                const att = s.attention || {};
+                const goals = s.goals || {};
+                const budget = s.resources || {};
+                const per = s.perception || {};
+                const last = s.last_event;
+
+                let html = `<div class="cog-status-line"><span class="dot ${dotCls}"></span>${esc(status)}</div>`;
+
+                html += cogSection('STATE',
+                    cogRow('Schema', 'v' + (s.schema_version ?? '—')) +
+                    cogRow('State ID', s.state_id) +
+                    cogRow('Updated', cogFmtTime(s.updated_at))
+                );
+
+                html += cogSection('FOCUS',
+                    `<div class="cog-focus">${esc(s.current_focus || '—')}</div>` +
+                    cogRow('Focus ID', att.current_focus_id || '—')
+                );
+
+                html += cogSection('PERCEPTION',
+                    cogRow('CPU', per.cpu_percent != null ? per.cpu_percent.toFixed(1) + '%' : '—') +
+                    cogRow('Memory', per.memory_mb != null ? per.memory_mb.toFixed(0) + ' MB' : '—') +
+                    cogRow('Compute Tier', per.compute_tier || '—') +
+                    cogRow('Source', per.source || '—')
+                );
+
+                html += cogSection('ATTENTION ECONOMY',
+                    cogRow('Selected', att.selected_count || 0, 'good') +
+                    cogRow('Deferred', att.deferred_count || 0) +
+                    cogRow('Discarded', att.discarded_count || 0, 'warn') +
+                    cogRow('Pending', att.pending_candidates || 0) +
+                    cogRow('Deferred Pool', att.deferred_candidates || 0) +
+                    cogRow('Stale Skipped', s.stale_events_discarded || 0)
+                );
+
+                html += cogSection('GOAL FIELD',
+                    cogRow('Total', goals.total || 0) +
+                    cogRow('Active', goals.active || 0, 'good') +
+                    cogRow('Proposed', goals.proposed || 0) +
+                    cogRow('Blocked', goals.blocked || 0, 'bad') +
+                    cogRow('Paused', goals.paused || 0, 'warn') +
+                    cogRow('Completed', goals.completed || 0) +
+                    cogRow('Abandoned', goals.abandoned || 0)
+                );
+
+                html += cogSection('RESOURCE BUDGET',
+                    cogRow('Compute Units', budget.compute_units != null ? budget.compute_units.toFixed(2) : '—') +
+                    cogRow('API Budget', budget.api_calls != null ? budget.api_calls.toFixed(1) : '—') +
+                    cogRow('Latency Cap', budget.latency_ms != null ? budget.latency_ms.toFixed(0) + ' ms' : '—') +
+                    cogRow('Concurrency', budget.concurrent_workload != null ? `${budget.concurrent_workload}/${budget.max_concurrent}` : '—')
+                );
+
+                if (last && last.event_type) {
+                    html += cogSection('LAST EVENT',
+                        cogRow('Type', last.event_type) +
+                        cogRow('Source', last.source || '—') +
+                        cogRow('Seq', last.sequence != null ? last.sequence : '—') +
+                        cogRow('Time', last.timestamp ? new Date(last.timestamp).toLocaleTimeString() : '—')
+                    );
+                }
+
+                if (s.recovery_error) {
+                    html += cogSection('RECOVERY', `<div class="cog-value bad">${esc(s.recovery_error)}</div>`);
+                }
+
+                html += cogSection('PENDING',
+                    cogRow('Queued Events', s.pending_events || 0)
+                );
+
+                document.getElementById('cognitiveBody').innerHTML = html;
+            } catch (e) {}
+        }
+        setInterval(syncCognitive, 1500);
+
+        // --- 5. Voice Interaction Engine (Web Speech API & Audio RMS Analyzer) ---
+        let recognition = null;
+        let audioCtx = null;
+        let analyser = null;
+        let micStream = null;
+
+        async function initMicrophone() {
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 256;
+                
+                micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const source = audioCtx.createMediaStreamSource(micStream);
+                source.connect(analyser);
+
+                // Real-time audio RMS loop
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+                function trackMicRMS() {
+                    analyser.getByteTimeDomainData(dataArray);
+                    let sum = 0;
+                    for (let i = 0; i < dataArray.length; i++) {
+                        const val = (dataArray[i] - 128) / 128;
+                        sum += val * val;
+                    }
+                    const rms = Math.sqrt(sum / dataArray.length);
+                    audioRms = rms;
+                    
+                    // Natural interruption check
+                    if (runtimeState === 'SPEAKING' && rms > 0.15) {
+                        fetch('/api/voice/interrupt', { method: 'POST' });
+                        if (window.speechSynthesis) window.speechSynthesis.cancel();
+                    }
+
+                    requestAnimationFrame(trackMicRMS);
+                }
+                trackMicRMS();
+                document.getElementById('btnMicToggle').innerText = '🎙️ Mic Active';
+            } catch (e) {
+                console.warn("Microphone access unavailable, using simulated voice stream.", e);
+            }
+        }
+
+        // Voice Recognition Loop
+        const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRec) {
+            recognition = new SpeechRec();
+            recognition.continuous = true;
+            recognition.interimResults = true;
+
+            recognition.onresult_orig = null;
+            recognition.onresult = async (event) => {
+                // Stream real partial transcripts as they arrive; the final
+                // transcript is processed by the voice pipeline.
+                const last = event.results[event.results.length - 1];
+                if (last.isFinal) {
+                    const transcript = last[0].transcript;
+                    const res = await fetch('/api/voice/process', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ transcript })
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        // Speak the real cognitive response through the browser
+                        // speech engine when one is available.
+                        if (data.cognitive_response && 'speechSynthesis' in window) {
+                            const utter = new SpeechSynthesisUtterance(data.cognitive_response);
+                            utter.onstart = () => { audioRms = 0.8; };
+                            utter.onend = () => { audioRms = 0.0; };
+                            window.speechSynthesis.speak(utter);
+                        }
+                    }
+                } else {
+                    const partial = last[0].transcript;
+                    if (partial) {
+                        await fetch('/api/voice/partial', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ transcript: partial })
+                        });
+                    }
+                }
+                await syncState();
+            };
+
+            recognition.onerror = (e) => { console.warn("Recognition error:", e); };
+            recognition.onend = () => { recognition.start(); }; // Continuous restart
+        }
+
+        // --- 6. Event Handlers ---
+        async function sendCommand(command, payload) {
+            try {
+                const res = await fetch('/api/command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command, payload: payload || {} })
+                });
+                return await res.json();
+            } catch (e) { return { status: 'ERROR', error: String(e) }; }
+        }
+
+        document.getElementById('btnMicToggle').addEventListener('click', async () => {
+            await initMicrophone();
+            await sendCommand('START_LISTENING');
+            if (recognition) {
+                try { recognition.start(); } catch (e) {}
+            }
+        });
+
+        // Pulse pause/resume toggle through the controlled CommandAPI.
+        let pulsePaused = false;
+        document.getElementById('btnPulse').addEventListener('click', async () => {
+            const cmd = pulsePaused ? 'RESUME_PULSE' : 'PAUSE_PULSE';
+            const r = await sendCommand(cmd);
+            if (r.status === 'OK') {
+                pulsePaused = !pulsePaused;
+                document.getElementById('btnPulse').innerText = pulsePaused ? 'Pulse: Resume' : 'Pulse: Pause';
+            }
+            await syncState();
+        });
+
+        // Offline mode toggle (OFFLINE_ONLY <-> AUTO) through the CommandAPI.
+        let offlineOnly = false;
+        document.getElementById('btnOffline').addEventListener('click', async () => {
+            const mode = offlineOnly ? 'AUTO' : 'OFFLINE_ONLY';
+            const r = await sendCommand('SET_OFFLINE_MODE', { mode });
+            if (r.status === 'OK') {
+                offlineOnly = !offlineOnly;
+                document.getElementById('btnOffline').innerText = offlineOnly ? 'Offline: ONLY' : 'Offline: AUTO';
+            }
+            await syncState();
+        });
+
+        attachEventStream();
+
+        document.getElementById('btnSimWake').addEventListener('click', async () => {
+            const res = await fetch('/api/voice/process', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ transcript: "Hey Zerion" })
+            });
+            await syncState();
+        });
+
+        document.getElementById('btnSimTask').addEventListener('click', async () => {
+            const res = await fetch('/api/voice/process', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ transcript: "Zerion, open my tasks and check active objectives." })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.cognitive_response && 'speechSynthesis' in window) {
+                    const utter = new SpeechSynthesisUtterance(data.cognitive_response);
+                    utter.onstart = () => { audioRms = 0.85; };
+                    utter.onend = () => { audioRms = 0.0; };
+                    window.speechSynthesis.speak(utter);
+                }
+            }
+            await syncState();
+        });
+
+        // HUD toggles the Cognitive Core panel (real Slice 1 state)
+        document.getElementById('hudControl').addEventListener('click', () => {
+            const panel = document.getElementById('cognitivePanel');
+            const wasHidden = panel.classList.contains('hidden');
+            panel.classList.toggle('hidden');
+            if (wasHidden) syncCognitive();
+        });
+
+        document.getElementById('panelClose').addEventListener('click', () => {
+            document.getElementById('cognitivePanel').classList.add('hidden');
+        });
+
+        // Legacy tray actions — guarded so missing buttons never crash the page.
+        const flywheelBtn = document.getElementById('btnFlywheel');
+        if (flywheelBtn) {
+            flywheelBtn.addEventListener('click', async () => {
+                await fetch('/api/cycle', { method: 'POST' });
+                await syncState();
+                await syncCognitive();
+            });
+        }
+
+        const introspectBtn = document.getElementById('btnIntrospect');
+        if (introspectBtn) {
+            introspectBtn.addEventListener('click', async () => {
+                const res = await fetch('/api/level/7');
+                const data = await res.json();
+                alert(`Level 7 Introspection:\nQuestion: ${data.question}\nAcceleration: ${data.current_learning_acceleration}\nOptimization: ${data.meta_learning_optimization}`);
+            });
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# ZERION-X — GENESIS & Ω Intelligence Foundry
+# Core runtime is pure Python 3.9+ standard library for ultra-portable execution (Android / Termux / Edge / Server)
+# All dependencies pinned to exact versions (2026-08-13) for reproducible installs.
+# Every pin satisfies the original >= range AND supports Python 3.9 (project floor).
+
+# Foundation Intelligence & Model Providers (pinned)
+openai==2.48.0
+httpx==0.28.1
+
+# Optional Local Quantized GGUF Model Execution (pinned; opt-in)
+# llama-cpp-python==0.3.34
+
+# Optional Hardware Audio Device Streaming (pinned; opt-in)
+# sounddevice==0.5.5
+# numpy==2.0.2
