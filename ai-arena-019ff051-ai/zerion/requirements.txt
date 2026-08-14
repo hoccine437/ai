@@ -1,20 +1,31 @@
-# ZERION-X — GENESIS & Ω Intelligence Foundry
-# Core runtime is pure Python 3.9+ standard library for ultra-portable execution (Android / Termux / Edge / Server)
-# All dependencies pinned to exact versions (2026-08-13) for reproducible installs.
-# Every pin satisfies the original >= range AND supports Python 3.9 (project floor).
+# ZERION-X — GENESIS & Ω Intelligence Foundry (nested package copy)
+# Core runtime is pure Python 3.9+ standard library for ultra-portable
+# execution (Android / Termux / Edge / Server). 100% local cognition — model
+# discovery, GGUF inference, STT/TTS and the cognitive runtime — requires NO
+# third-party package and NO network.
+#
+# Install options:
+#   pip install -r requirements.txt          # core only (zero deps)
+#   pip install -r requirements.txt[online]  # + legacy online adapter (httpx)
+#   pip install -r requirements.txt[local]   # + llama-cpp-python (desktop GGUF)
+#   pip install -r requirements.txt[audio]   # + sounddevice (real mic streaming)
+#
+# httpx is OPTIONAL: it is used only by the legacy OpenAI adapter
+# (zerion/model_providers/openai_provider.py), which is structurally excluded
+# from the local cognitive path (OFFLINE_ONLY routing never calls non-local
+# providers). The `openai` SDK is deliberately NOT pinned: the runtime never
+# imports it, and openai>=1.30 requires `jiter` (Rust), which ships no wheel
+# for Termux/Android aarch64 — it would break pip install on mobile.
 
-# Foundation Intelligence & Model Providers (pinned)
-# httpx is the only runtime dependency: OpenAIProvider posts to
-# api.openai.com via raw httpx (zerion/model_providers/openai_provider.py)
-# and falls back to a deterministic local engine when no key is set.
-# The `openai` SDK is deliberately NOT pinned: the runtime never imports it,
-# and openai>=1.30 requires `jiter` (Rust), which ships no wheel for
-# Termux/Android aarch64 — it would break pip install on mobile.
-httpx==0.28.1
+# --- Legacy online adapter (optional; NOT required for local cognition) ---
+# httpx==0.28.1
 
-# Optional Local Quantized GGUF Model Execution (pinned; opt-in)
+# --- Optional Local Quantized GGUF Model Execution (pinned; opt-in) ---
+# Real GGUF inference in LocalGGUFProvider auto-detects llama-cpp-python
+# (desktop/server) OR a llama.cpp CLI binary (llama-cli/main) on PATH — the
+# Termux path is a local llama.cpp build, no pip wheel needed.
 # llama-cpp-python==0.3.34
 
-# Optional Hardware Audio Device Streaming (pinned; opt-in)
+# --- Optional Hardware Audio Device Streaming (pinned; opt-in) ---
 # sounddevice==0.5.5
 # numpy==2.0.2
