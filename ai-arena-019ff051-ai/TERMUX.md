@@ -18,7 +18,7 @@ or manually:
 
 ```bash
 pkg install -y python termux-api
-python3 -m pip install -r requirements.txt    # openai, httpx (both pure Python)
+python3 -m pip install -r requirements.txt    # httpx (pure Python); the openai SDK is intentionally not installed — see below
 ```
 
 ## What works with zero installs
@@ -38,7 +38,7 @@ python3 -m pip install -r requirements.txt    # openai, httpx (both pure Python)
 | Microphone | `termux-api` + `termux-microphone-record` | The runtime detects the `TERMUX` platform and reports an honest `MIC_OFF` + reason when termux-api is missing (never fakes listening). |
 | TTS | `termux-api` → `termux-tts-speak` | Auto-detected on PATH (`zerion/voice/providers.py`). |
 | Local STT | whisper.cpp / vosk / openai-whisper on PATH | Binary presence is detected, never assumed. |
-| OpenAI provider | `.env` with `OPENAI_API_KEY` | Uses `httpx` directly; `openai` is pinned for declared parity but not imported by the runtime. |
+| OpenAI provider | `.env` with `OPENAI_API_KEY` | Uses `httpx` directly (never the `openai` SDK, which is not installed on Termux — see “Pinned dependencies” below). |
 | numpy (audio processing) | `pkg install python-numpy` | **Do not** `pip install numpy` on Termux — no Android aarch64 wheels; pip will try to compile. It is opt-in (`audio` extra) and not needed for the core or for termux-api mic capture. |
 | llama.cpp GGUF | build locally (`pkg`/compile) | Real inference is wired into `LocalGGUFProvider`: it auto-detects `llama-cli`/`main` on PATH (Termux) or `llama-cpp-python` (desktop). Models live in `models/*.gguf` (`ai-arena-019ff051-ai/models/`). See “Real local GGUF inference” below. |
 
@@ -75,12 +75,62 @@ ZERION_MODELS_DIR="$HOME/ai-arena-019ff051-ai/models" python3 main.py --models
 GGUF models are heavy on mobile — prefer small quantizations, and
 `OFFLINE_ONLY` + deterministic engines remain the zero-dependency fallback.
 
+## Quick start — run with a local GGUF model (Termux)
+
+```bash
+# 1. Install the runtime deps (pure Python; the openai SDK is intentionally
+#    not installed — see “Pinned dependencies” below)
+python3 -m pip install -r requirements.txt
+
+# 2. Drop your .gguf file(s) into models/ (or set ZERION_MODELS_DIR elsewhere)
+
+# 3. Verify discovery — your model should be listed here
+python3 main.py --models
+
+# 4. Install a real inference backend: llama.cpp CLI. (llama-cpp-python has no
+#    Android aarch64 wheels, so Termux uses the llama.cpp command-line tool.)
+pkg install -y cmake ninja clang make git
+cd ~ && git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j2 --target llama-cli
+cp build/bin/llama-cli "$PREFIX/bin/"
+cd ~/ai-arena-019ff051-ai
+
+# 5. Run the web UI (open http://localhost:8080 on the phone)
+python3 main.py --ui --port 8080
+
+# 6. In another Termux tab, ask the local model (offline — never touches cloud):
+curl -s -X POST http://localhost:8080/api/command \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"RUN_TASK","payload":{"prompt":"Explain reflection in Python","mode":"OFFLINE_ONLY"}}'
+```
+
+- The response’s `provider` should be `local_gguf`; if the backend is missing,
+  the response returns an honest error naming the absent piece — never
+  fabricated text.
+- `python3 main.py --cycles 1` runs the autonomous flywheel with its built-in
+  deterministic engines; GGUF inference is exercised through the router
+  (`RUN_TASK` with `OFFLINE_ONLY`, or voice/daemon tasks), not the flywheel.
+- Tunables: `ZERION_GGUF_BACKEND=cli`, `ZERION_GGUF_THREADS`,
+  `ZERION_GGUF_CONTEXT`, `ZERION_GGUF_MAX_TOKENS`, `ZERION_GGUF_TEMPERATURE`,
+  `ZERION_GGUF_TIMEOUT_SECONDS`.
+
 ## Pinned dependencies (2026-08-13)
 
 `requirements.txt` / `requirements-dev.txt` / `setup.py` / `pyproject.toml`
-are pinned to exact versions that **all support Python 3.9** — the pinned
-`openai==2.48.0` and `httpx==0.28.1` are pure-Python wheels, installable on
-Termux without a compiler.
+are pinned to exact versions that **all support Python 3.9**, and everything
+in the default install is pure Python — installable on Termux without a
+compiler. The only runtime dependency is `httpx==0.28.1` (the OpenAI provider
+calls `api.openai.com` with raw `httpx` and falls back to a deterministic
+local engine when no key is set).
+
+The `openai` SDK is deliberately **not** a dependency: the runtime never
+imports it, and `openai` (2.x) requires `jiter`, a Rust package with no
+prebuilt wheel for Termux/Android aarch64. Pinning it makes
+`pip install -r requirements.txt` try to compile Rust on-device and fail with
+the `maturin` / `aarch64-unknown-linux-android` build error. Desktop users who
+want the SDK for their own scripts can `pip install openai` separately — the
+runtime itself does not need it.
 
 ## Verification status (honest)
 

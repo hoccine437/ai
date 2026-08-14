@@ -2,9 +2,10 @@
 # ZERION-X — Termux bootstrap.
 # Run inside Termux, from the repo root (ai-arena-019ff051-ai/).
 # The core runtime is pure Python 3.9+ standard library: it runs with ZERO
-# third-party packages. This script installs the optional provider deps
-# (openai, httpx — both pure Python) plus termux-api for mic/TTS, then
-# verifies the engine and the full test suite.
+# third-party packages. This script installs the optional provider dep
+# (httpx — pure Python; the openai SDK is intentionally not installed because
+# its jiter dependency has no Termux/Android aarch64 wheel) plus termux-api
+# for mic/TTS, then verifies the engine and the full test suite.
 set -e
 
 cd "$(dirname "$0")"

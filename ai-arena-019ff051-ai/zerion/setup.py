@@ -39,13 +39,14 @@ setup(
     python_requires=">=3.9",
     # Pinned exact versions (2026-08-13), synchronized with requirements.txt and
     # pyproject.toml [project].dependencies. Every pin supports Python 3.9.
+    # httpx is the only runtime dependency (OpenAIProvider calls the API with
+    # raw httpx); the `openai` SDK is intentionally absent — the runtime never
+    # imports it, and its jiter dependency has no Termux/Android aarch64 wheel.
     install_requires=[
-        "openai==2.48.0",
         "httpx==0.28.1",
     ],
     # Mirrors pyproject.toml [project.optional-dependencies].
     extras_require={
-        "openai": ["openai==2.48.0", "httpx==0.28.1"],
         "local_llm": ["llama-cpp-python==0.3.34"],
         "audio": ["sounddevice==0.5.5", "numpy==2.0.2"],
         "dev": [
@@ -55,7 +56,6 @@ setup(
             "mypy==1.19.1",
         ],
         "all": [
-            "openai==2.48.0",
             "httpx==0.28.1",
             "llama-cpp-python==0.3.34",
             "sounddevice==0.5.5",

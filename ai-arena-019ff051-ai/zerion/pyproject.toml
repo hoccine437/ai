@@ -12,8 +12,10 @@ license = { text = "Apache-2.0" }
 requires-python = ">=3.9"
 # Pinned exact versions (2026-08-13), synchronized with requirements.txt and
 # setup.py install_requires. Every pin supports Python 3.9.
+# httpx is the only runtime dependency (OpenAIProvider calls the API with raw
+# httpx); the `openai` SDK is intentionally absent — the runtime never imports
+# it, and its jiter dependency has no Termux/Android aarch64 wheel.
 dependencies = [
-    "openai==2.48.0",
     "httpx==0.28.1",
 ]
 classifiers = [
@@ -34,10 +36,6 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-openai = [
-    "openai==2.48.0",
-    "httpx==0.28.1",
-]
 local_llm = [
     "llama-cpp-python==0.3.34",
 ]
@@ -52,7 +50,6 @@ dev = [
     "mypy==1.19.1",
 ]
 all = [
-    "openai==2.48.0",
     "httpx==0.28.1",
     "llama-cpp-python==0.3.34",
     "sounddevice==0.5.5",

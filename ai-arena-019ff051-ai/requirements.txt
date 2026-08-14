@@ -4,7 +4,12 @@
 # Every pin satisfies the original >= range AND supports Python 3.9 (project floor).
 
 # Foundation Intelligence & Model Providers (pinned)
-openai==2.48.0
+# httpx is the only runtime dependency: OpenAIProvider posts to
+# api.openai.com via raw httpx (zerion/model_providers/openai_provider.py)
+# and falls back to a deterministic local engine when no key is set.
+# The `openai` SDK is deliberately NOT pinned: the runtime never imports it,
+# and openai>=1.30 requires `jiter` (Rust), which ships no wheel for
+# Termux/Android aarch64 — it would break pip install on mobile.
 httpx==0.28.1
 
 # Optional Local Quantized GGUF Model Execution (pinned; opt-in)
