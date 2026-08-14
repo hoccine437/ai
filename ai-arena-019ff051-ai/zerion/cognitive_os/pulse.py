@@ -198,9 +198,11 @@ class CognitivePulse:
             return
         async with self._lock:
             await self.initialize()
-            if self.state != PulseLifecycle.PAUSED:
+            if self.state not in (PulseLifecycle.PAUSED, PulseLifecycle.DEGRADED):
                 # A pulse restored from a persisted PAUSED state stays paused
-                # until an explicit resume().
+                # until an explicit resume(); a pulse restored from DEGRADED
+                # stays DEGRADED (degraded mode is never silently resumed or
+                # declared healthy — it requires explicit recovery).
                 self.state = PulseLifecycle.RUNNING
                 self.degraded_reason = ""
         if self.state == PulseLifecycle.RUNNING:
