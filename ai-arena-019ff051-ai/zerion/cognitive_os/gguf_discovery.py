@@ -29,6 +29,42 @@ DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024      # 8 GiB
 DEFAULT_MAX_LOADED_BYTES = 4 * 1024 * 1024 * 1024     # 4 GiB resident budget
 DEFAULT_MAX_LOADED_MODELS = 1
 
+# The repository's mobile UI folder, used as a canonical model drop location
+# (``zerion-compose-mobile-ui/models``) when it exists.
+MOBILE_UI_MODELS_FOLDER = "zerion-compose-mobile-ui"
+
+
+def resolve_models_dir(default: str = "models",
+                       base: Optional[Path] = None) -> str:
+    """Resolve the directory local GGUF models are scanned from.
+
+    Priority (first match wins):
+
+      1. ``ZERION_MODELS_DIR`` env var (absolute, or relative to ``base``/CWD).
+      2. ``zerion-compose-mobile-ui/models`` — the mobile UI folder in this
+         repository layout (checked both as a sibling of ``base`` and inside
+         ``base``) — when the caller is using the runtime's default
+         ``"models"`` and that folder exists.
+      3. ``default`` (normally ``models``, next to the runtime).
+
+    Explicit non-default paths pass through untouched (no auto-routing), so
+    callers that opt into a specific directory always get exactly that
+    directory.
+    """
+    env = os.environ.get("ZERION_MODELS_DIR", "").strip()
+    if env:
+        return env
+    if str(Path(default)) == "models":
+        base = base or Path.cwd()
+        candidates = (
+            base.parent / MOBILE_UI_MODELS_FOLDER / Path(default).name,
+            base / MOBILE_UI_MODELS_FOLDER / Path(default).name,
+        )
+        for candidate in candidates:
+            if candidate.is_dir():
+                return str(candidate.resolve())
+    return default
+
 
 class LocalModelDiscovery:
     """Real, safe discovery of local GGUF models (no inference — describing

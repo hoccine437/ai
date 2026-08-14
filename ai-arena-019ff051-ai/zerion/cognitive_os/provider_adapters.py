@@ -21,7 +21,10 @@ import os
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Set
 
-from zerion.cognitive_os.gguf_discovery import LocalModelDiscovery
+from zerion.cognitive_os.gguf_discovery import (
+    LocalModelDiscovery,
+    resolve_models_dir,
+)
 from zerion.cognitive_os.provider_interface import (
     CODE,
     LONG_CONTEXT,
@@ -150,9 +153,11 @@ class LegacyGeminiAdapter:
 
 
 class LegacyGGUFAdapter:
-    """Local GGUF adapter. Discovery is real (file scan + magic validation);
-    generation is a structured MODEL_LOAD_FAILURE until a real inference
-    engine is wired in (llama-cpp is not installed in this runtime)."""
+    """Local GGUF adapter. Discovery is real (file scan + magic validation)
+    and generation is REAL when an inference backend exists (llama-cpp-python
+    or a llama.cpp CLI on PATH — see ``LocalGGUFProvider``); otherwise it is
+    a structured MODEL_LOAD_FAILURE that names the missing piece. Never
+    returns canned text pretending to be model output."""
 
     provider_name = "local_gguf"
     is_local = True
@@ -160,25 +165,36 @@ class LegacyGGUFAdapter:
     def __init__(self, models_dir: str = "models",
                  discovery: Optional[LocalModelDiscovery] = None,
                  provider: Optional[LegacyGGUFProvider] = None):
+        models_dir = resolve_models_dir(models_dir)
         self._legacy = provider or LegacyGGUFProvider(models_dir=models_dir)
         self.discovery = discovery or LocalModelDiscovery(models_dir=models_dir)
 
     # -- interface ----------------------------------------------------------
 
     async def generate(self, call: ProviderCall) -> RawProviderResponse:
-        # A valid local model exists but there is no inference engine wired in.
-        # Honest structured failure: no output, no fabricated text.
         info = self.discovery.get(call.model_id)
         if info is None or info.status != ProviderStatus.AVAILABLE:
             return RawProviderResponse(
                 output=None, success=False,
                 failure_kind=ProviderFailureKind.MODEL_UNAVAILABLE,
                 error=f"local model {call.model_id} unavailable or not found")
+        resp = await self._legacy.generate_response(
+            call.prompt, model_id=call.model_id)
+        if resp.execution_mode.value == "REAL_MODEL_RESPONSE":
+            return RawProviderResponse(
+                output=resp.content, latency_ms=resp.latency_ms,
+                usage={"prompt_tokens": resp.prompt_tokens,
+                       "completion_tokens": resp.completion_tokens,
+                       "cost_cents": resp.cost_cents},
+                success=True)
+        # Legacy provider could not run local inference (no backend / empty
+        # output). Structured failure — never the canned fallback text.
+        reason = getattr(self._legacy, "last_error", "") or \
+                 "local GGUF inference backend unavailable"
         return RawProviderResponse(
             output=None, success=False,
             failure_kind=ProviderFailureKind.MODEL_LOAD_FAILURE,
-            error="local inference engine not wired into this runtime "
-                  "(discovery is real; GGUF runtime unavailable)")
+            error=f"local_gguf: {reason}")
 
     async def stream(self, call: ProviderCall) -> AsyncIterator[RawProviderResponse]:
         raise NotImplementedError("local gguf adapter: streaming not supported")

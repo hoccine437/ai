@@ -40,7 +40,40 @@ python3 -m pip install -r requirements.txt    # openai, httpx (both pure Python)
 | Local STT | whisper.cpp / vosk / openai-whisper on PATH | Binary presence is detected, never assumed. |
 | OpenAI provider | `.env` with `OPENAI_API_KEY` | Uses `httpx` directly; `openai` is pinned for declared parity but not imported by the runtime. |
 | numpy (audio processing) | `pkg install python-numpy` | **Do not** `pip install numpy` on Termux — no Android aarch64 wheels; pip will try to compile. It is opt-in (`audio` extra) and not needed for the core or for termux-api mic capture. |
-| llama.cpp GGUF | build locally (`pkg`/compile) | Opt-in `local_llm` extra; heavy on mobile, use `OFFLINE_ONLY` with deterministic engines otherwise. |
+| llama.cpp GGUF | build locally (`pkg`/compile) | Real inference is wired into `LocalGGUFProvider`: it auto-detects `llama-cli`/`main` on PATH (Termux) or `llama-cpp-python` (desktop). Models live in `zerion-compose-mobile-ui/models/*.gguf`. See “Real local GGUF inference” below. |
+
+## Real local GGUF inference
+
+Drop a `.gguf` file into `zerion-compose-mobile-ui/models/` (any depth —
+discovery is recursive and validates the GGUF magic header) and the runtime
+will detect, register, and route offline requests to it. The model directory
+is resolved in this order:
+
+1. `ZERION_MODELS_DIR` env var, if set (absolute or relative path).
+2. `zerion-compose-mobile-ui/models` — the canonical folder in this repo
+   (checked as a sibling of the runtime dir, and inside the current dir).
+3. `models/` next to the runtime (legacy default).
+
+Generation runs through a lazy backend chain:
+
+1. **llama-cpp-python** (desktop/server: `pip install llama-cpp-python`)
+2. **llama.cpp CLI** (`llama-cli`, or legacy `main`, on PATH — the Termux path:
+   build llama.cpp locally with `pkg`/compile and put the binary on PATH)
+
+If neither backend exists the provider returns an honest labeled fallback that
+names the missing piece — it never fabricates model text. Tunables (env):
+`ZERION_GGUF_BACKEND` (`auto|python|cli|none`), `ZERION_GGUF_THREADS`,
+`ZERION_GGUF_CONTEXT` (default 2048), `ZERION_GGUF_MAX_TOKENS` (default 512),
+`ZERION_GGUF_TEMPERATURE` (default 0.7), `ZERION_GGUF_TIMEOUT_SECONDS`.
+Verify discovery with `python3 main.py --models`; if you keep the model
+elsewhere, point the runtime at it explicitly:
+
+```bash
+ZERION_MODELS_DIR="$HOME/zerion-compose-mobile-ui/models" python3 main.py --models
+```
+
+GGUF models are heavy on mobile — prefer small quantizations, and
+`OFFLINE_ONLY` + deterministic engines remain the zero-dependency fallback.
 
 ## Pinned dependencies (2026-08-13)
 

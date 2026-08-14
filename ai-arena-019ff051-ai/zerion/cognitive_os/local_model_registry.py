@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Set
 from zerion.cognitive_os.gguf_discovery import (
     LocalModelDiscovery,
     ModelLoadManager,
+    resolve_models_dir,
 )
 from zerion.cognitive_os.provider_interface import TEXT
 from zerion.cognitive_os.router_types import ProviderStatus
@@ -34,7 +35,7 @@ class LocalModelRegistry:
                  discovery: Optional[LocalModelDiscovery] = None,
                  load_manager: Optional[ModelLoadManager] = None,
                  available_ram_mb: Optional[float] = None):
-        self.models_dir = Path(models_dir)
+        self.models_dir = Path(resolve_models_dir(models_dir))
         self.discovery = discovery or LocalModelDiscovery(models_dir=models_dir)
         self.load_manager = load_manager or ModelLoadManager(self.discovery)
         self.available_ram_mb = available_ram_mb

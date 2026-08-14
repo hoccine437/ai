@@ -104,6 +104,7 @@ from zerion.voice.pipeline import VoiceFirstInteractionPipeline
 from zerion.cognitive_os.organism import CognitiveOrganism, OrganismCycleResult
 from zerion.cognitive_os.objective_manager import ObjectiveContinuityManager
 from zerion.cognitive_os.cognitive_runtime import CognitiveRuntime
+from zerion.cognitive_os.gguf_discovery import resolve_models_dir
 from zerion.cognitive_os.local_model_registry import LocalModelRegistry
 from zerion.ui.visualization_adapter import VisualizationStateAdapter
 from zerion.ui.commands import CommandAPI
@@ -300,7 +301,7 @@ class AscendantEngine:
         # Slice 1: Cognitive Foundation — owns CognitiveState and wires the event bus,
         # Goal Field (reuses the organism's persistent objective store) and Attention
         # Economy into the runtime. No model dependencies.
-        self.models_dir = models_dir or str(Path.cwd() / "models")
+        self.models_dir = models_dir or resolve_models_dir("models")
         self.cognitive_runtime = CognitiveRuntime(
             data_dir=str(self.data_dir),
             event_bus=self.event_bus,

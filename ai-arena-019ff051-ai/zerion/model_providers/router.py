@@ -24,6 +24,10 @@ class CognitiveDepthLevel(str, Enum):
 
 class CognitiveRouter:
     def __init__(self, models_dir: str = "models"):
+        # Lazy import: keeps the model_providers package free of cognitive_os
+        # import-order dependencies.
+        from zerion.cognitive_os.gguf_discovery import resolve_models_dir
+        models_dir = resolve_models_dir(models_dir)
         self.providers: Dict[str, ModelProvider] = {
             "openai": OpenAIProvider(),
             "gemini": GeminiProvider(),

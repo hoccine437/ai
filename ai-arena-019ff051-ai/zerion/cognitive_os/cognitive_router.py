@@ -22,6 +22,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 from zerion.cognitive_os.gguf_discovery import (
     LocalModelDiscovery,
     ModelLoadManager,
+    resolve_models_dir,
 )
 from zerion.cognitive_os.performance_ledger import PerformanceLedger
 from zerion.cognitive_os.provider_health import ProviderHealthTracker
@@ -162,7 +163,8 @@ class CognitiveRouter:
                  emit: Optional[Callable[[str, Dict[str, Any]], Awaitable[None]]] = None):
         self.health = health or ProviderHealthTracker()
         self.ledger = ledger
-        self.local_models = local_models or LocalModelDiscovery(models_dir="models")
+        self.local_models = local_models or \
+            LocalModelDiscovery(models_dir=resolve_models_dir("models"))
         self.load_manager = load_manager or ModelLoadManager(self.local_models)
         self.selector = ModelSelector(depth=depth, policy_version=policy_version)
         self.policy_version = policy_version
