@@ -208,10 +208,16 @@ class SelfModificationGate:
 
     def __init__(self, sandbox: Optional[CapabilitySandbox] = None,
                  policy: Optional[GatePolicy] = None,
-                 allowed_components: Optional[List[str]] = None):
+                 allowed_components: Optional[List[str]] = None,
+                 security: Optional[Any] = None):
         self.sandbox = sandbox or CapabilitySandbox()
         self.policy = policy or GatePolicy()
         self.allowed_components = list(allowed_components or [])
+        # Optional canonical SecurityBoundary. When present, self-modification
+        # approval requires SYSTEM_MUTATE authorization — the model can never
+        # bypass the boundary, and a boundary that does not hold SYSTEM_MUTATE
+        # (the default) denies every self-modification at the approval gate.
+        self.security = security
 
     # -- 1. static analysis + security check --------------------------------
 
@@ -361,6 +367,28 @@ class SelfModificationGate:
 
     def approve(self, proposal: ImprovementProposal,
                 approval: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
+        # Security boundary first: SELF_MODIFICATION/SYSTEM_MUTATE is a
+        # high-risk permission that is never held by default. If a boundary is
+        # wired, it MUST authorize the operation or the gate refuses — policy
+        # checks below never run for an unauthorized change.
+        if self.security is not None:
+            from zerion.runtime.security import PermissionLevel
+            authorized = False
+            try:
+                authorized = self.security.authorize(
+                    action="self_modification",
+                    target=proposal.target_component,
+                    required_permission=PermissionLevel.SYSTEM_MUTATE,
+                    caller="self_modification_gate",
+                    metadata={"proposal_id": proposal.proposal_id,
+                              "modification_type": proposal.modification_type.value},
+                )
+            except Exception:  # noqa: BLE001 — authorization failure must deny
+                authorized = False
+            if not authorized:
+                return False, (
+                    "self-modification denied by security boundary "
+                    "(SYSTEM_MUTATE not held)")
         analysis = proposal.analysis or {}
         if not analysis.get("passed"):
             return False, "static analysis failed"

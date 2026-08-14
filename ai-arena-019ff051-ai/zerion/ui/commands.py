@@ -2,10 +2,12 @@
 Command API — Slice 10.
 
 The ONLY way the UI can request actions from the runtime. Every command is:
-1. validated (unknown commands rejected, payload schema enforced)
-2. executed through runtime-controlled interfaces (CognitiveRuntime goal APIs,
-   CognitivePulse lifecycle, CognitiveRouter, voice pipeline state machine)
-3. never allowed to bypass permissions, the SelfModificationGate, tool
+1. authorized through the canonical SecurityBoundary (a denial blocks the
+   command before any handler runs — never silently bypassed),
+2. validated (unknown commands rejected, payload schema enforced),
+3. executed through runtime-controlled interfaces (CognitiveRuntime goal APIs,
+   CognitivePulse lifecycle, CognitiveRouter, voice pipeline state machine),
+4. never allowed to bypass permissions, the SelfModificationGate, tool
    security or system-control policy — no command here touches the gate or
    mutates cognitive internals directly.
 
@@ -14,14 +16,65 @@ All commands return a structured result: {command, status, result, error}.
 
 from typing import Any, Dict, List, Optional
 
+from zerion.runtime.security import PermissionLevel
+
 
 class CommandValidationError(ValueError):
     pass
 
 
+class SecurityDeniedError(ValueError):
+    """Raised when the canonical SecurityBoundary denies a command."""
+
+
+# Command -> required permission. Commands not listed here are treated as
+# SYSTEM_MUTATE (denied by default): unknown/unsafe commands can never run
+# just because no entry exists.
+_COMMAND_PERMISSIONS: Dict[str, PermissionLevel] = {
+    # User-visible introspection + workspace-scoped actions (default-granted).
+    "START_LISTENING": PermissionLevel.INTERNAL_EXECUTE,
+    "STOP_LISTENING": PermissionLevel.INTERNAL_EXECUTE,
+    "CANCEL_OPERATION": PermissionLevel.INTERNAL_EXECUTE,
+    "PAUSE_PULSE": PermissionLevel.INTERNAL_EXECUTE,
+    "RESUME_PULSE": PermissionLevel.INTERNAL_EXECUTE,
+    "SET_OFFLINE_MODE": PermissionLevel.INTERNAL_EXECUTE,
+    "SELECT_MODEL": PermissionLevel.WORKSPACE_WRITE,
+    "CREATE_GOAL": PermissionLevel.WORKSPACE_WRITE,
+    "PAUSE_GOAL": PermissionLevel.WORKSPACE_WRITE,
+    "RESUME_GOAL": PermissionLevel.WORKSPACE_WRITE,
+    "RUN_TASK": PermissionLevel.WORKSPACE_WRITE,
+}
+
+
 class CommandAPI:
     def __init__(self, engine: Any):
         self.engine = engine
+
+    # -- authorization -----------------------------------------------------
+
+    def _authorize(self, command: str) -> None:
+        """Gate every command through the canonical SecurityBoundary.
+
+        Raises SecurityDeniedError when the boundary denies; the handler is
+        never invoked. A missing boundary (should not happen on the engine)
+        denies by default — fail closed, never open."""
+        required = _COMMAND_PERMISSIONS.get(command.upper())
+        if required is None:
+            raise SecurityDeniedError(
+                f"command '{command}' requires SYSTEM_MUTATE authorization "
+                f"and is denied by default")
+        boundary = getattr(self.engine, "security", None)
+        if boundary is None:
+            raise SecurityDeniedError(
+                "no security boundary wired — commands fail closed")
+        if not boundary.authorize(
+                action=f"command_{command.lower()}",
+                target=f"command:{command}",
+                required_permission=required,
+                caller="command_api"):
+            raise SecurityDeniedError(
+                f"command '{command}' denied by security boundary "
+                f"(requires {required.value})")
 
     # -- registry ----------------------------------------------------------
 
@@ -33,6 +86,11 @@ class CommandAPI:
                 "command": command, "status": "VALIDATION_ERROR",
                 "error": f"unknown command '{command}' — allowed: "
                          + ", ".join(sorted(self.available_commands()))}
+        try:
+            self._authorize(command)
+        except SecurityDeniedError as e:
+            return {"command": command, "status": "SECURITY_DENIED",
+                    "error": str(e)}
         try:
             result = await handler(payload)
             return {"command": command, "status": "OK", "result": result}

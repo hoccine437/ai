@@ -34,7 +34,11 @@ class OrganismCycleResult:
     selected_strategy: str
     selected_architecture: str
     reality_consequence_verified: bool
-    learning_acceleration: float
+    # None = not measured. The organism never fabricates an acceleration ratio
+    # (a hard-coded "2.57x" was previously reported as if it were a real
+    # measurement). The engine passes its real measured value through
+    # engine_context["learning_acceleration"] when one exists.
+    learning_acceleration: Optional[float]
     duration_ms: float
 
 
@@ -115,9 +119,14 @@ class CognitiveOrganism:
         )
 
         # 7. AUTOPOIETIC REFLECTION
+        # The engine injects its real measured acceleration ratio via
+        # engine_context["learning_acceleration"] (an Optional[float]); without
+        # it the reflection is honestly UNMEASURED. No fabricated 2.57, and no
+        # invented strategy-market reputations.
+        measured_acceleration = engine_context.get("learning_acceleration")
         reflection = self.reflection_engine.perform_reflection(
-            recent_learning_acceleration=2.57,
-            strategy_market_reputations={strat_name: 0.95},
+            recent_learning_acceleration=measured_acceleration,
+            strategy_market_reputations={},
             failed_tasks_count=0
         )
 
@@ -131,6 +140,6 @@ class CognitiveOrganism:
             selected_strategy=strat_name,
             selected_architecture=arch.name,
             reality_consequence_verified=consequence.reality_verified,
-            learning_acceleration=2.57,
+            learning_acceleration=measured_acceleration,
             duration_ms=round(duration, 2)
         )

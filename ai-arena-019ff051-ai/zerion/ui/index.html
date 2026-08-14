@@ -1,1138 +1,788 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>ZERION-X — GENESIS (Voice-First 9:16)</title>
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            user-select: none;
-            -webkit-user-select: none;
-            font-family: "SF Mono", "Roboto Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-        }
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ZERION X — COGNITIVE CORE</title>
+<style>
+  :root {
+    --bg: #000000;
+    --blue-deep: #06233f;
+    --blue-core: #0a4f8a;
+    --blue-electric: #1e90ff;
+    --blue-cyan: #4fd8ff;
+    --amber: #ffb347;
+    --red-dim: #b3544e;
+    --text-dim: #4a6a88;
+    --text: #9fc4e8;
+    --text-bright: #d8ecff;
+    --mono: "SF Mono", "Cascadia Code", Consolas, "Roboto Mono", monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: var(--bg); overflow: hidden; }
+  body { font-family: var(--mono); color: var(--text); }
 
-        body, html {
-            width: 100%;
-            height: 100%;
-            background-color: #050508;
-            color: #4FD6FF;
-            overflow: hidden;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
+  #orb-stage { position: fixed; inset: 0; }
+  #orb-stage canvas { display: block; width: 100%; height: 100%; }
+  /* soft ambient glow behind the orb (pure CSS, no GPU 3D cost) */
+  #orb-stage::after {
+    content: ""; position: absolute; left: 50%; top: 50%;
+    width: 62vmin; height: 62vmin; transform: translate(-50%, -50%);
+    background: radial-gradient(circle, rgba(10,79,138,0.22) 0%, rgba(6,35,63,0.10) 40%, transparent 70%);
+    border-radius: 50%; pointer-events: none;
+  }
 
-        /* 
-           Canonical 9:16 Portrait Smartphone Frame Container.
-           On smartphones: fills 100% of the portrait viewport.
-           On desktop/tablets: neatly centered in a canonical 9:16 smartphone enclosure.
-        */
-        #phone-viewport {
-            position: relative;
-            width: 100vw;
-            height: 100vh;
-            max-width: calc(100vh * (9 / 16));
-            max-height: 100vh;
-            aspect-ratio: 9 / 16;
-            background-color: #0E0E14;
-            overflow: hidden;
-            box-shadow: 0 0 50px rgba(0, 0, 0, 0.9), 0 0 1px rgba(0, 196, 255, 0.2);
-        }
+  #hud {
+    position: fixed; inset: 0; pointer-events: none; z-index: 5;
+    padding: max(16px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right))
+             max(16px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  #hud .row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  #hud .left, #hud .right { font-size: 11px; letter-spacing: 1.5px; line-height: 1.9; }
+  #hud .label { color: var(--text-dim); }
+  #hud .value { color: var(--text-bright); }
+  #state-line { font-size: 15px; letter-spacing: 4px; color: var(--blue-cyan); text-shadow: 0 0 12px rgba(79,216,255,0.35); }
+  #mic-line { color: var(--text); }
+  #mic-line.ok { color: var(--blue-cyan); }
+  #mic-line.bad { color: var(--amber); }
+  #model-line { color: var(--text); }
 
-        @media (max-aspect-ratio: 9/16) {
-            #phone-viewport {
-                width: 100vw;
-                height: 100vh;
-                max-width: 100vw;
-                aspect-ratio: unset;
-            }
-        }
+  #controls {
+    pointer-events: auto; display: flex; gap: 10px; align-items: center;
+    background: rgba(6, 20, 34, 0.55); border: 1px solid rgba(30,144,255,0.18);
+    border-radius: 10px; padding: 8px 10px; backdrop-filter: blur(6px);
+    max-width: 640px; width: 100%;
+  }
+  #controls button {
+    pointer-events: auto; cursor: pointer; background: transparent;
+    color: var(--blue-cyan); border: 1px solid rgba(79,216,255,0.4);
+    border-radius: 7px; font-family: var(--mono); font-size: 11px;
+    letter-spacing: 1.5px; padding: 8px 12px; white-space: nowrap;
+    transition: border-color 0.2s, color 0.2s, background 0.2s;
+  }
+  #controls button:hover { border-color: var(--blue-cyan); background: rgba(79,216,255,0.08); }
+  #controls button.active { background: rgba(79,216,255,0.16); color: var(--text-bright); }
+  #controls input[type=text] {
+    pointer-events: auto; flex: 1; min-width: 0; background: transparent;
+    border: none; border-bottom: 1px solid rgba(30,144,255,0.35); outline: none;
+    color: var(--text-bright); font-family: var(--mono); font-size: 12px; padding: 6px 4px;
+  }
+  #controls input[type=text]::placeholder { color: var(--text-dim); }
 
-        #canvas-container {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 1;
-        }
+  #transcript {
+    pointer-events: none; position: fixed; left: 50%; bottom: max(18px, env(safe-area-inset-bottom));
+    transform: translateX(-50%); width: min(720px, calc(100vw - 36px)); z-index: 6;
+    font-size: 11px; line-height: 1.8; letter-spacing: 0.5px; color: var(--text);
+    background: linear-gradient(transparent, rgba(0,0,0,0.82));
+    padding: 20px 8px 0; max-height: 30vh; overflow: hidden;
+  }
+  #transcript .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #transcript .t.user { color: var(--blue-cyan); }
+  #transcript .t.zerion { color: var(--text-bright); }
+  #transcript .t.err { color: var(--amber); }
 
-        canvas {
-            display: block;
-            width: 100%;
-            height: 100%;
-        }
-
-        /* Subtle Ambient Textures & Vignette */
-        .ambient-grid {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-image: 
-                linear-gradient(rgba(0, 196, 255, 0.015) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(0, 196, 255, 0.015) 1px, transparent 1px);
-            background-size: 24px 24px;
-            pointer-events: none;
-            z-index: 2;
-        }
-
-        .scanlines {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(
-                rgba(14, 14, 20, 0) 50%, 
-                rgba(0, 0, 0, 0.3) 50%
-            );
-            background-size: 100% 4px;
-            pointer-events: none;
-            z-index: 3;
-            opacity: 0.55;
-        }
-
-        .vignette {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            box-shadow: inset 0 0 120px rgba(10, 10, 16, 0.95);
-            pointer-events: none;
-            z-index: 4;
-        }
-
-        /* Safe Area and Micro-HUD Layout */
-        .hud-control-btn {
-            position: absolute;
-            top: calc(env(safe-area-inset-top, 0px) + 16px);
-            left: 16px;
-            width: 56px;
-            height: 28px;
-            border-radius: 8px;
-            border: 1px solid rgba(58, 168, 216, 0.7);
-            background: rgba(14, 14, 20, 0.7);
-            color: #3AA8D8;
-            font-size: 10px;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            z-index: 10;
-            backdrop-filter: blur(8px);
-            transition: all 0.2s ease;
-        }
-
-        .hud-control-btn:hover {
-            border-color: #00C4FF;
-            color: #00C4FF;
-            box-shadow: 0 0 12px rgba(0, 196, 255, 0.35);
-        }
-
-        .hud-top-right {
-            position: absolute;
-            top: calc(env(safe-area-inset-top, 0px) + 16px);
-            right: 16px;
-            z-index: 10;
-            font-size: 11px;
-            font-weight: 500;
-            letter-spacing: 0.5px;
-            color: #4FD6FF;
-            text-align: right;
-            line-height: 1.4;
-            text-transform: uppercase;
-        }
-
-        .hud-bottom-left {
-            position: absolute;
-            bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
-            left: 16px;
-            z-index: 10;
-            font-size: 10.5px;
-            font-weight: 500;
-            letter-spacing: 0.5px;
-            color: #4FD6FF;
-            line-height: 1.4;
-            max-width: 75%;
-            pointer-events: none;
-        }
-
-        .hud-bottom-right {
-            position: absolute;
-            bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
-            right: 16px;
-            z-index: 10;
-            font-size: 10.5px;
-            font-weight: 500;
-            letter-spacing: 0.5px;
-            color: #4FD6FF;
-            text-align: right;
-            line-height: 1.4;
-        }
-
-        .status-badge {
-            display: inline-block;
-            color: #4FD6FF;
-            transition: color 0.15s ease-out;
-        }
-
-        .status-badge.booting {
-            color: #FFD24D;
-        }
-
-        .status-badge.listening {
-            color: #00C4FF;
-            text-shadow: 0 0 8px rgba(0, 196, 255, 0.6);
-        }
-
-        .status-badge.speaking {
-            color: #FF8900;
-            text-shadow: 0 0 8px rgba(255, 137, 0, 0.6);
-        }
-
-        .status-badge.error {
-            color: #FF3B30;
-            text-shadow: 0 0 8px rgba(255, 59, 48, 0.6);
-        }
-
-        .status-badge.degraded {
-            color: #FF8900;
-            text-shadow: 0 0 8px rgba(255, 137, 0, 0.6);
-        }
-
-        /* Voice-First Live Audio Reactive Waveform */
-        .voice-indicator {
-            position: absolute;
-            bottom: calc(env(safe-area-inset-bottom, 0px) + 65px);
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 15;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            height: 20px;
-            pointer-events: none;
-            opacity: 0.8;
-        }
-
-        .audio-bar {
-            width: 3px;
-            height: 4px;
-            background: #00C4FF;
-            border-radius: 2px;
-            transition: height 0.05s ease;
-        }
-
-        /* Contextual Action Triggers (Mobile-Friendly Thumb Zone) */
-        .context-tray {
-            position: absolute;
-            bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 20;
-            display: flex;
-            gap: 8px;
-            justify-content: center;
-        }
-
-        .tray-btn {
-            background: rgba(14, 14, 20, 0.85);
-            border: 1px solid rgba(58, 168, 216, 0.5);
-            color: #4FD6FF;
-            padding: 6px 12px;
-            font-size: 9.5px;
-            font-weight: 500;
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
-            cursor: pointer;
-            border-radius: 4px;
-            backdrop-filter: blur(10px);
-            transition: all 0.2s ease;
-        }
-
-        .tray-btn:hover {
-            border-color: #00C4FF;
-            color: #00C4FF;
-            box-shadow: 0 0 10px rgba(0, 196, 255, 0.3);
-        }
-
-        /* Cognitive Core Panel — renders the real Slice 1 CognitiveState document */
-        .cognitive-panel {
-            position: absolute;
-            top: calc(env(safe-area-inset-top, 0px) + 56px);
-            right: 12px;
-            bottom: calc(env(safe-area-inset-bottom, 0px) + 150px);
-            width: 72%;
-            max-width: 320px;
-            z-index: 30;
-            background: rgba(10, 12, 18, 0.92);
-            border: 1px solid rgba(58, 168, 216, 0.55);
-            border-radius: 10px;
-            backdrop-filter: blur(12px);
-            box-shadow: 0 0 24px rgba(0, 196, 255, 0.18), inset 0 0 30px rgba(0, 0, 0, 0.5);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        .cognitive-panel.hidden {
-            display: none;
-        }
-
-        .panel-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px 10px;
-            border-bottom: 1px solid rgba(58, 168, 216, 0.35);
-            background: rgba(14, 20, 30, 0.6);
-            font-size: 9.5px;
-            font-weight: 600;
-            letter-spacing: 1px;
-            color: #4FD6FF;
-            text-transform: uppercase;
-            flex-shrink: 0;
-        }
-
-        .panel-close {
-            cursor: pointer;
-            color: #3AA8D8;
-            font-size: 13px;
-            line-height: 1;
-            padding: 0 2px;
-        }
-
-        .panel-close:hover {
-            color: #FF3B30;
-        }
-
-        .panel-body {
-            padding: 8px 10px;
-            overflow-y: auto;
-            font-size: 9.5px;
-            line-height: 1.5;
-            color: #7FD8F5;
-        }
-
-        .panel-body::-webkit-scrollbar {
-            width: 3px;
-        }
-
-        .panel-body::-webkit-scrollbar-thumb {
-            background: rgba(0, 196, 255, 0.35);
-            border-radius: 2px;
-        }
-
-        .cog-section {
-            margin-bottom: 8px;
-        }
-
-        .cog-section-title {
-            color: #FFD24D;
-            font-size: 8.5px;
-            font-weight: 600;
-            letter-spacing: 0.8px;
-            text-transform: uppercase;
-            margin-bottom: 2px;
-            border-bottom: 1px dotted rgba(255, 210, 77, 0.25);
-            padding-bottom: 1px;
-        }
-
-        .cog-row {
-            display: flex;
-            justify-content: space-between;
-            gap: 8px;
-        }
-
-        .cog-row .cog-label {
-            color: rgba(127, 216, 245, 0.75);
-            flex-shrink: 0;
-        }
-
-        .cog-row .cog-value {
-            color: #FFFFFF;
-            text-align: right;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .cog-value.bad {
-            color: #FF3B30;
-        }
-
-        .cog-value.warn {
-            color: #FF8900;
-        }
-
-        .cog-value.good {
-            color: #00C4FF;
-        }
-
-        .cog-focus {
-            color: #FFFFFF;
-            font-size: 10px;
-            word-break: break-word;
-            line-height: 1.4;
-        }
-
-        .cog-status-line {
-            color: #4FD6FF;
-            letter-spacing: 0.5px;
-            margin-bottom: 6px;
-        }
-
-        .cog-status-line .dot {
-            display: inline-block;
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            margin-right: 6px;
-            background: #00C4FF;
-            box-shadow: 0 0 6px rgba(0, 196, 255, 0.8);
-            animation: cogPulse 1.6s ease-in-out infinite;
-        }
-
-        .cog-status-line .dot.stop {
-            background: #3AA8D8;
-            animation: none;
-            box-shadow: none;
-        }
-
-        .cog-status-line .dot.error {
-            background: #FF3B30;
-            box-shadow: 0 0 6px rgba(255, 59, 48, 0.8);
-        }
-
-        .cog-status-line .dot.recover {
-            background: #FF8900;
-            box-shadow: 0 0 6px rgba(255, 137, 0, 0.8);
-        }
-
-        @keyframes cogPulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.35; }
-        }
-    </style>
+  #webgl-fallback-note {
+    position: fixed; bottom: 96px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; letter-spacing: 1px; color: var(--text-dim); z-index: 7;
+  }
+</style>
 </head>
 <body>
-    <!-- Canonical 9:16 Portrait Enclosure -->
-    <div id="phone-viewport">
-        <div id="canvas-container">
-            <canvas id="zerionCanvas"></canvas>
-        </div>
-        
-        <div class="ambient-grid"></div>
-        <div class="scanlines"></div>
-        <div class="vignette"></div>
 
-        <!-- HUD Control (Top-Start, 56x28dp, 8dp radius, 16dp inset) -->
-        <div class="hud-control-btn" id="hudControl">HUD</div>
+<div id="orb-stage"></div>
 
-        <!-- Top-Right Telemetry & Voice State -->
-        <div class="hud-top-right">
-            <div>STATUS: <span id="statusLabel" class="status-badge booting">ASSEMBLING… 0%</span></div>
-            <div style="font-size: 9.5px; opacity: 0.7; margin-top: 2px;">WAKE: "ZERION" • <span id="confVal">UNKNOWN</span></div>
-            <div style="font-size: 9.5px; opacity: 0.7; margin-top: 2px;">MIC: <span id="micVal" style="color: #3AA8D8;">—</span></div>
-        </div>
-
-        <!-- Voice Reactive Waveform Indicator -->
-        <div class="voice-indicator" id="voiceIndicator">
-            <div class="audio-bar" id="b1"></div>
-            <div class="audio-bar" id="b2"></div>
-            <div class="audio-bar" id="b3"></div>
-            <div class="audio-bar" id="b4"></div>
-            <div class="audio-bar" id="b5"></div>
-        </div>
-
-        <!-- Bottom-Left Active Objective & Voice Speech Output -->
-        <div class="hud-bottom-left">
-            <div style="color: #FFD24D; font-size: 9.5px; font-weight: 600;">ACTIVE OBJECTIVE</div>
-            <div id="objectiveText" style="color: #FFFFFF; font-size: 10.5px; margin-bottom: 2px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">UNKNOWN</div>
-            <div id="voiceFeedback" style="font-size: 9.5px; color: #00C4FF; opacity: 0.85;">VOICE: Say "Hey Zerion" to interact</div>
-        </div>
-
-        <!-- Bottom-Right Hardware & Learning Telemetry -->
-        <div class="hud-bottom-right">
-            <div><span id="hostTele">UNKNOWN CPU</span></div>
-            <div style="font-size: 9.5px; opacity: 0.7;">ACCEL: <span id="accelVal" style="color: #00C4FF;">UNKNOWN</span></div>
-        </div>
-
-        <!-- Secondary Contextual Voice Triggers & Controlled Commands -->
-        <div class="context-tray">
-            <button class="tray-btn" id="btnMicToggle">🎙️ Enable Mic</button>
-            <button class="tray-btn" id="btnSimWake">Say "Hey Zerion"</button>
-            <button class="tray-btn" id="btnSimTask">Voice: "Open Tasks"</button>
-            <button class="tray-btn" id="btnPulse">Pulse: Pause</button>
-            <button class="tray-btn" id="btnOffline">Offline: AUTO</button>
-        </div>
-
-        <!-- Cognitive Core Panel — live Slice 1 CognitiveState, toggled by HUD -->
-        <div class="cognitive-panel hidden" id="cognitivePanel">
-            <div class="panel-header">
-                <span>COGNITIVE CORE</span>
-                <span class="panel-close" id="panelClose" title="Close">✕</span>
-            </div>
-            <div class="panel-body" id="cognitiveBody">LOADING…</div>
-        </div>
+<div id="hud">
+  <div class="row">
+    <div class="left">
+      <div class="label">ZERION X</div>
+      <div id="state-line">BOOTING</div>
+      <div class="label" id="mode-line">MODE: —</div>
     </div>
-
-    <script>
-        // --- 1. Canonical 9:16 Portrait Canvas Setup & Particle Field ---
-        const canvas = document.getElementById('zerionCanvas');
-        const container = document.getElementById('phone-viewport');
-        const ctx = canvas.getContext('2d');
-
-        let width, height, dpr;
-        let time = 0;
-        let bootStartTime = Date.now();
-        const BOOT_DURATION_MS = 5800;
-
-        const PARTICLE_COUNT = 2000;
-        const targetPositions = new Float32Array(PARTICLE_COUNT * 2);
-        const scatterPositions = new Float32Array(PARTICLE_COUNT * 2);
-        const particleMeta = new Float32Array(PARTICLE_COUNT * 3);    // [type, baseAlpha, delay]
-        
-        // Exact official color tokens
-        const COLOR_BG = '#0E0E14';
-        const COLOR_CYAN_BRIGHT = '#00C4FF';
-        const COLOR_CYAN_DIM = '#3AA8D8';
-        const COLOR_CORE_WHITE = '#FFFFFF';
-        const COLOR_CORE_GOLD = '#FFD24D';
-        const COLOR_CORE_ORANGE = '#FF8900';
-        const COLOR_SPINE_DARK = '#3A2A10';
-        const COLOR_STATUS_TEXT = '#4FD6FF';
-
-        // Precompute Bust Silhouette Target Points Once (Zero per-frame allocation)
-        function precomputeSilhouette() {
-            let seed = 42;
-            function rand() {
-                seed = (seed * 9301 + 49297) % 233280;
-                return seed / 233280;
-            }
-
-            for (let i = 0; i < PARTICLE_COUNT; i++) {
-                const ratio = i / PARTICLE_COUNT;
-                let tx, ty, type, alpha, delay;
-
-                // Layer A: Head & Neck Flow Lines (40%)
-                if (ratio < 0.40) {
-                    type = 0; // Contour
-                    alpha = 0.85;
-                    const angle = (i / (PARTICLE_COUNT * 0.40)) * Math.PI * 2;
-                    const rx = 80 * (1.0 - 0.12 * Math.abs(Math.sin(angle)));
-                    const ry = 110;
-                    tx = rx * Math.cos(angle);
-                    ty = ry * Math.sin(angle) - 45;
-                }
-                // Layer B: Shoulders & Neck Ribs (25%)
-                else if (ratio < 0.65) {
-                    type = 1; // Shoulder / Spine
-                    alpha = 0.70;
-                    const subT = (ratio - 0.40) / 0.25;
-                    const side = (i % 2 === 0) ? -1 : 1;
-                    tx = side * (22 + 160 * subT);
-                    ty = 75 + 115 * subT;
-                }
-                // Layer C: Crown Density & Scattered Points (35%)
-                else {
-                    type = 2; // Scatter / Crown
-                    const isCrown = rand() < 0.65;
-                    if (isCrown) {
-                        const angle = rand() * Math.PI + Math.PI;
-                        const r = rand() * 90;
-                        tx = r * Math.cos(angle);
-                        ty = r * Math.sin(angle) * 0.7 - 105;
-                        alpha = rand() * 0.35 + 0.45;
-                    } else {
-                        const angle = rand() * Math.PI * 2;
-                        const r = rand() * 180;
-                        tx = r * Math.cos(angle);
-                        ty = r * Math.sin(angle) * 0.85 - 25;
-                        alpha = rand() * 0.30 + 0.20;
-                    }
-                }
-
-                // Scatter coordinates for boot burst (diagonal upward sweep)
-                const sAngle = rand() * Math.PI * 2;
-                const sDist = rand() * 400 + 120;
-                const sx = sDist * Math.cos(sAngle);
-                const sy = sDist * Math.sin(sAngle) - 220;
-                delay = rand() * 350 + 50;
-
-                targetPositions[i * 2] = tx;
-                targetPositions[i * 2 + 1] = ty;
-                scatterPositions[i * 2] = sx;
-                scatterPositions[i * 2 + 1] = sy;
-                particleMeta[i * 3] = type;
-                particleMeta[i * 3 + 1] = alpha;
-                particleMeta[i * 3 + 2] = delay;
-            }
-        }
-        precomputeSilhouette();
-
-        function resize() {
-            dpr = window.devicePixelRatio || 1;
-            const rect = container.getBoundingClientRect();
-            width = rect.width;
-            height = rect.height;
-            canvas.width = width * dpr;
-            canvas.height = height * dpr;
-            ctx.scale(dpr, dpr);
-        }
-        window.addEventListener('resize', resize);
-        resize();
-
-        // --- 2. Live Runtime State & Animation Variables ---
-        let runtimeState = 'BOOTING';
-        let currentPulsePeriod = 2.0;
-        let currentPulseAmp = 0.12;
-        let audioRms = 0.0;
-
-        let smoothedPulseAmp = 0.12;
-        let smoothedPulsePeriod = 2.0;
-
-        // --- 3. 9:16 Portrait Bounded Render Draw Loop ---
-        function render() {
-            time += 0.016;
-            ctx.clearRect(0, 0, width, height);
-
-            const elapsedBoot = Date.now() - bootStartTime;
-            const bootProgress = Math.min(1.0, elapsedBoot / BOOT_DURATION_MS);
-
-            // Interpolate pulse parameters
-            smoothedPulseAmp += (currentPulseAmp - smoothedPulseAmp) * 0.08;
-            smoothedPulsePeriod += (currentPulsePeriod - smoothedPulsePeriod) * 0.08;
-
-            const cx = width / 2;
-            const cy = height * 0.42;
-            const scale = Math.min(width / 380, height / 680) * 0.96;
-
-            ctx.save();
-            ctx.translate(cx, cy);
-            ctx.scale(scale, scale);
-
-            // --- LAYER 1: Concentric Ripple Rings Sub-layer (Head Centered) ---
-            if (bootProgress >= 0.85) {
-                const ringAlphaMax = (runtimeState === 'LISTENING') ? 0.65 : 0.40;
-                const ringCycleDuration = (runtimeState === 'LISTENING') ? 2200 : 2800;
-                for (let r = 0; r < 3; r++) {
-                    const ringOffset = r * 900;
-                    const ringElapsed = (Date.now() + ringOffset) % ringCycleDuration;
-                    const ringProgress = ringElapsed / ringCycleDuration;
-                    const currentRadius = ringProgress * 185;
-                    const ringAlpha = (1.0 - ringProgress) * ringAlphaMax;
-
-                    ctx.strokeStyle = `rgba(0, 196, 255, ${ringAlpha})`;
-                    ctx.lineWidth = 1.2;
-                    ctx.beginPath();
-                    ctx.arc(0, -45, currentRadius, 0, Math.PI * 2);
-                    ctx.stroke();
-                }
-            }
-
-            // --- LAYER 2: Face Wave-Stack Glow & Radial Cognitive Core ---
-            if (bootProgress > 0.3) {
-                const corePulse = Math.sin((time * Math.PI * 2) / smoothedPulsePeriod) * smoothedPulseAmp + 1.0;
-                const reactiveAmp = (runtimeState === 'SPEAKING' || runtimeState === 'LISTENING') ? audioRms * 0.45 : 0.0;
-                const totalGlow = (corePulse + reactiveAmp) * bootProgress;
-
-                // Horizontal Wave-Stack Glow in Face Region
-                const stackBands = 7;
-                for (let b = 0; b < stackBands; b++) {
-                    const bandY = -95 + b * 16;
-                    const bandWidth = 65 * Math.sin((b / (stackBands - 1)) * Math.PI) + 10;
-                    const bandAlpha = (0.35 + 0.15 * Math.sin(time * 3 + b)) * totalGlow;
-
-                    const bandGrad = ctx.createLinearGradient(-bandWidth, bandY, bandWidth, bandY);
-                    bandGrad.addColorStop(0, 'rgba(255, 137, 0, 0)');
-                    bandGrad.addColorStop(0.25, `rgba(255, 210, 77, ${bandAlpha * 0.7})`);
-                    bandGrad.addColorStop(0.5, `rgba(255, 255, 255, ${bandAlpha * 0.95})`);
-                    bandGrad.addColorStop(0.75, `rgba(255, 210, 77, ${bandAlpha * 0.7})`);
-                    bandGrad.addColorStop(1, 'rgba(255, 137, 0, 0)');
-
-                    ctx.fillStyle = bandGrad;
-                    ctx.fillRect(-bandWidth, bandY - 3, bandWidth * 2, 6);
-                }
-
-                // Central Radial Core Glow (White -> Gold -> Orange)
-                const coreGrad = ctx.createRadialGradient(0, -45, 4, 0, -45, 85);
-                coreGrad.addColorStop(0, `rgba(255, 255, 255, ${0.95 * totalGlow})`);
-                coreGrad.addColorStop(0.22, `rgba(255, 210, 77, ${0.85 * totalGlow})`);
-                coreGrad.addColorStop(0.55, `rgba(255, 137, 0, ${0.45 * totalGlow})`);
-                coreGrad.addColorStop(0.85, `rgba(255, 137, 0, ${0.12 * totalGlow})`);
-                coreGrad.addColorStop(1, 'rgba(14, 14, 20, 0)');
-
-                ctx.shadowColor = COLOR_CORE_ORANGE;
-                ctx.shadowBlur = (runtimeState === 'SPEAKING' ? 45 : 32) * totalGlow;
-                ctx.fillStyle = coreGrad;
-                ctx.beginPath();
-                ctx.arc(0, -45, 85, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.shadowBlur = 0;
-
-                // Two Gold Neck Streaks running to bottom origin point
-                ctx.strokeStyle = `rgba(255, 137, 0, ${0.65 * totalGlow})`;
-                ctx.lineWidth = 2.0;
-                ctx.shadowColor = COLOR_CORE_ORANGE;
-                ctx.shadowBlur = 10;
-
-                ctx.beginPath();
-                ctx.moveTo(-16, 60); ctx.lineTo(0, 175);
-                ctx.moveTo(16, 60); ctx.lineTo(0, 175);
-                ctx.stroke();
-                ctx.shadowBlur = 0;
-            }
-
-            // --- LAYER 3: Precomputed 2,000 Particle Bust Silhouette ---
-            const idleJitter = (runtimeState === 'LISTENING' || runtimeState === 'IDLE') ? 1.2 : 2.2;
-
-            for (let i = 0; i < PARTICLE_COUNT; i++) {
-                const tx = targetPositions[i * 2];
-                const ty = targetPositions[i * 2 + 1];
-                const sx = scatterPositions[i * 2];
-                const sy = scatterPositions[i * 2 + 1];
-                const type = particleMeta[i * 3];
-                const baseAlpha = particleMeta[i * 3 + 1];
-                const delay = particleMeta[i * 3 + 2];
-
-                let px, py, alpha;
-                if (bootProgress < 1.0) {
-                    const particleT = Math.max(0, Math.min(1.0, (elapsedBoot - delay) / (BOOT_DURATION_MS - 800)));
-                    const ease = particleT < 0.5 ? 4 * particleT * particleT * particleT : 1 - Math.pow(-2 * particleT + 2, 3) / 2;
-                    px = sx + (tx - sx) * ease;
-                    py = sy + (ty - sy) * ease;
-                    alpha = baseAlpha * ease;
-                } else {
-                    const jx = Math.sin(time * 3 + i) * idleJitter;
-                    const jy = Math.cos(time * 2.5 + i * 1.5) * idleJitter;
-                    px = tx + jx;
-                    py = ty + jy;
-                    alpha = baseAlpha;
-                }
-
-                const isBright = (type === 0);
-                ctx.fillStyle = isBright 
-                    ? `rgba(0, 196, 255, ${alpha})` 
-                    : `rgba(58, 168, 216, ${alpha * 0.55})`;
-
-                ctx.fillRect(px - 0.8, py - 0.8, 1.6, 1.6);
-            }
-
-            ctx.restore();
-
-            // Update Voice Visual Waveform Bars
-            const bars = [document.getElementById('b1'), document.getElementById('b2'), document.getElementById('b3'), document.getElementById('b4'), document.getElementById('b5')];
-            const activeH = Math.max(4, Math.min(24, audioRms * 30));
-            bars.forEach((b, idx) => {
-                const h = (runtimeState === 'SPEAKING' || runtimeState === 'LISTENING') ? activeH * (0.6 + 0.4 * Math.sin(time * 10 + idx)) : 4;
-                b.style.height = h + 'px';
-                b.style.background = (runtimeState === 'SPEAKING') ? '#FF8900' : '#00C4FF';
-            });
-
-            requestAnimationFrame(render);
-        }
-        requestAnimationFrame(render);
-
-        // --- 4. Live Telemetry Polling & State Synchronization ---
-        // Real perception has precedence over presentation defaults for the HUD CPU readout.
-        let hasRealPerception = false;
-
-        async function syncState() {
-            try {
-                const res = await fetch('/api/state');
-                if (res.ok) {
-                    const data = await res.json();
-                    runtimeState = data.runtime_state || 'IDLE';
-
-                    const statusLabel = document.getElementById('statusLabel');
-                    statusLabel.innerText = data.state_label || runtimeState || 'UNKNOWN';
-                    statusLabel.className = 'status-badge ' + (runtimeState || 'idle').toLowerCase();
-
-                    // Honest rendering: UNKNOWN unless the runtime reported a value.
-                    document.getElementById('objectiveText').innerText =
-                        (data.active_goal && data.active_goal !== 'None') ? data.active_goal : 'UNKNOWN';
-                    document.getElementById('confVal').innerText =
-                        (data.confidence != null) ? Math.round(data.confidence * 100) + '%' : 'UNKNOWN';
-                    document.getElementById('accelVal').innerText =
-                        (data.learning_acceleration && data.learning_acceleration !== 'UNKNOWN')
-                            ? data.learning_acceleration : 'UNKNOWN';
-
-                    // Honest microphone readout (Slice 10.1): only ever the real
-                    // perception telemetry. LISTENING is shown ONLY when the voice
-                    // service confirms the mic pipeline is genuinely active.
-                    const micVal = document.getElementById('micVal');
-                    if (micVal && data.voice_perception) {
-                        const vp = data.voice_perception;
-                        micVal.innerText = vp.is_listening ? 'LISTENING' : (vp.mic_phase || 'UNKNOWN');
-                        micVal.style.color = vp.is_listening ? '#00C4FF' : '#FF8900';
-                        micVal.title = vp.reason ? ('Mic: ' + vp.reason) : '';
-                    }
-
-                    if (data.explanation_chain && data.explanation_chain[0]) {
-                        document.getElementById('voiceFeedback').innerText = data.explanation_chain[0];
-                    }
-
-                    if (data.resource_state && data.resource_state.cpu_percent != null && !hasRealPerception) {
-                        document.getElementById('hostTele').innerText = `${data.resource_state.cpu_percent}% CPU`;
-                    }
-
-                    currentPulsePeriod = data.core_pulse_period_s || 2.0;
-                    currentPulseAmp = data.core_pulse_amplitude || 0.12;
-                    if (data.audio_amplitude_rms > 0) {
-                        audioRms = data.audio_amplitude_rms;
-                    }
-                }
-            } catch (e) {}
-        }
-        setInterval(syncState, 1500);
-
-        // --- 4a. Real-time event stream (SSE) from the VisualizationStateAdapter ---
-        // Updates the HUD the moment a real runtime event lands — no polling of
-        // the whole runtime, and no fabricated state.
-        let lastEventLabel = '';
-        function attachEventStream() {
-            try {
-                const es = new EventSource('/api/stream');
-                es.onmessage = (e) => {
-                    try {
-                        const ev = JSON.parse(e.data);
-                        if (ev && ev.event_type) {
-                            lastEventLabel = `EVENT ${ev.event_type}${ev.count > 1 ? ' x' + ev.count : ''}`;
-                            const fb = document.getElementById('voiceFeedback');
-                            if (fb && !fb.innerText.startsWith('VOICE INPUT')) {
-                                fb.innerText = lastEventLabel;
-                            }
-                        }
-                        syncState();
-                        if (!document.getElementById('cognitivePanel').classList.contains('hidden')) {
-                            syncCognitive();
-                        }
-                    } catch (err) {}
-                };
-                es.onerror = () => {
-                    // EventSource auto-reconnects; show honest idle state meanwhile.
-                };
-            } catch (err) {}
-        }
-
-        // --- 4b. Cognitive Core Panel — renders the real Slice 1 CognitiveState ---
-        function esc(v) {
-            if (v === null || v === undefined) return '—';
-            return String(v).replace(/[&<>"']/g, c => ({
-                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-            }[c]));
-        }
-
-        function cogRow(label, value, cls) {
-            return `<div class="cog-row"><span class="cog-label">${esc(label)}</span><span class="cog-value ${cls || ''}">${esc(value)}</span></div>`;
-        }
-
-        function cogSection(title, rowsHtml) {
-            return `<div class="cog-section"><div class="cog-section-title">${esc(title)}</div>${rowsHtml}</div>`;
-        }
-
-        const COG_STATUS_COLOR = {
-            RUNNING: 'good', PAUSED: 'warn', RECOVERING: 'warn',
-            ERROR: 'bad', STOPPED: 'stop', INITIALIZING: 'stop'
-        };
-
-        function cogFmtTime(secs) {
-            if (!secs) return '—';
-            try { return new Date(secs * 1000).toLocaleTimeString(); } catch (e) { return '—'; }
-        }
-
-        async function syncCognitive() {
-            try {
-                const res = await fetch('/api/cognitive-state');
-                if (!res.ok) return;
-                const s = await res.json();
-
-                // Real measured perception drives the HUD CPU readout once a cycle has run.
-                if (s.perception && s.perception.cpu_percent > 0) {
-                    hasRealPerception = true;
-                    const mem = s.perception.memory_mb ? ` • ${s.perception.memory_mb.toFixed(0)}MB` : '';
-                    document.getElementById('hostTele').innerText = `${s.perception.cpu_percent.toFixed(1)}% CPU${mem}`;
-                }
-
-                const status = s.runtime_status || 'UNKNOWN';
-                const dotCls = status === 'ERROR' ? 'error' : (status === 'RECOVERING' ? 'recover' : (status === 'RUNNING' ? '' : 'stop'));
-                const att = s.attention || {};
-                const goals = s.goals || {};
-                const budget = s.resources || {};
-                const per = s.perception || {};
-                const last = s.last_event;
-
-                let html = `<div class="cog-status-line"><span class="dot ${dotCls}"></span>${esc(status)}</div>`;
-
-                html += cogSection('STATE',
-                    cogRow('Schema', 'v' + (s.schema_version ?? '—')) +
-                    cogRow('State ID', s.state_id) +
-                    cogRow('Updated', cogFmtTime(s.updated_at))
-                );
-
-                html += cogSection('FOCUS',
-                    `<div class="cog-focus">${esc(s.current_focus || '—')}</div>` +
-                    cogRow('Focus ID', att.current_focus_id || '—')
-                );
-
-                html += cogSection('PERCEPTION',
-                    cogRow('CPU', per.cpu_percent != null ? per.cpu_percent.toFixed(1) + '%' : '—') +
-                    cogRow('Memory', per.memory_mb != null ? per.memory_mb.toFixed(0) + ' MB' : '—') +
-                    cogRow('Compute Tier', per.compute_tier || '—') +
-                    cogRow('Source', per.source || '—')
-                );
-
-                html += cogSection('ATTENTION ECONOMY',
-                    cogRow('Selected', att.selected_count || 0, 'good') +
-                    cogRow('Deferred', att.deferred_count || 0) +
-                    cogRow('Discarded', att.discarded_count || 0, 'warn') +
-                    cogRow('Pending', att.pending_candidates || 0) +
-                    cogRow('Deferred Pool', att.deferred_candidates || 0) +
-                    cogRow('Stale Skipped', s.stale_events_discarded || 0)
-                );
-
-                html += cogSection('GOAL FIELD',
-                    cogRow('Total', goals.total || 0) +
-                    cogRow('Active', goals.active || 0, 'good') +
-                    cogRow('Proposed', goals.proposed || 0) +
-                    cogRow('Blocked', goals.blocked || 0, 'bad') +
-                    cogRow('Paused', goals.paused || 0, 'warn') +
-                    cogRow('Completed', goals.completed || 0) +
-                    cogRow('Abandoned', goals.abandoned || 0)
-                );
-
-                html += cogSection('RESOURCE BUDGET',
-                    cogRow('Compute Units', budget.compute_units != null ? budget.compute_units.toFixed(2) : '—') +
-                    cogRow('API Budget', budget.api_calls != null ? budget.api_calls.toFixed(1) : '—') +
-                    cogRow('Latency Cap', budget.latency_ms != null ? budget.latency_ms.toFixed(0) + ' ms' : '—') +
-                    cogRow('Concurrency', budget.concurrent_workload != null ? `${budget.concurrent_workload}/${budget.max_concurrent}` : '—')
-                );
-
-                if (last && last.event_type) {
-                    html += cogSection('LAST EVENT',
-                        cogRow('Type', last.event_type) +
-                        cogRow('Source', last.source || '—') +
-                        cogRow('Seq', last.sequence != null ? last.sequence : '—') +
-                        cogRow('Time', last.timestamp ? new Date(last.timestamp).toLocaleTimeString() : '—')
-                    );
-                }
-
-                if (s.recovery_error) {
-                    html += cogSection('RECOVERY', `<div class="cog-value bad">${esc(s.recovery_error)}</div>`);
-                }
-
-                html += cogSection('PENDING',
-                    cogRow('Queued Events', s.pending_events || 0)
-                );
-
-                document.getElementById('cognitiveBody').innerHTML = html;
-            } catch (e) {}
-        }
-        setInterval(syncCognitive, 1500);
-
-        // --- 5. Voice Interaction Engine (Web Speech API & Audio RMS Analyzer) ---
-        let recognition = null;
-        let audioCtx = null;
-        let analyser = null;
-        let micStream = null;
-
-        async function initMicrophone() {
-            try {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                analyser = audioCtx.createAnalyser();
-                analyser.fftSize = 256;
-                
-                micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const source = audioCtx.createMediaStreamSource(micStream);
-                source.connect(analyser);
-
-                // Real-time audio RMS loop
-                const dataArray = new Uint8Array(analyser.frequencyBinCount);
-                function trackMicRMS() {
-                    analyser.getByteTimeDomainData(dataArray);
-                    let sum = 0;
-                    for (let i = 0; i < dataArray.length; i++) {
-                        const val = (dataArray[i] - 128) / 128;
-                        sum += val * val;
-                    }
-                    const rms = Math.sqrt(sum / dataArray.length);
-                    audioRms = rms;
-                    
-                    // Natural interruption check
-                    if (runtimeState === 'SPEAKING' && rms > 0.15) {
-                        fetch('/api/voice/interrupt', { method: 'POST' });
-                        if (window.speechSynthesis) window.speechSynthesis.cancel();
-                    }
-
-                    requestAnimationFrame(trackMicRMS);
-                }
-                trackMicRMS();
-                document.getElementById('btnMicToggle').innerText = '🎙️ Mic Active';
-            } catch (e) {
-                console.warn("Microphone access unavailable, using simulated voice stream.", e);
-            }
-        }
-
-        // Voice Recognition Loop
-        const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (SpeechRec) {
-            recognition = new SpeechRec();
-            recognition.continuous = true;
-            recognition.interimResults = true;
-
-            recognition.onresult_orig = null;
-            recognition.onresult = async (event) => {
-                // Stream real partial transcripts as they arrive; the final
-                // transcript is processed by the voice pipeline.
-                const last = event.results[event.results.length - 1];
-                if (last.isFinal) {
-                    const transcript = last[0].transcript;
-                    const res = await fetch('/api/voice/process', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ transcript })
-                    });
-                    if (res.ok) {
-                        const data = await res.json();
-                        // Speak the real cognitive response through the browser
-                        // speech engine when one is available.
-                        if (data.cognitive_response && 'speechSynthesis' in window) {
-                            const utter = new SpeechSynthesisUtterance(data.cognitive_response);
-                            utter.onstart = () => { audioRms = 0.8; };
-                            utter.onend = () => { audioRms = 0.0; };
-                            window.speechSynthesis.speak(utter);
-                        }
-                    }
-                } else {
-                    const partial = last[0].transcript;
-                    if (partial) {
-                        await fetch('/api/voice/partial', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ transcript: partial })
-                        });
-                    }
-                }
-                await syncState();
-            };
-
-            recognition.onerror = (e) => { console.warn("Recognition error:", e); };
-            recognition.onend = () => { recognition.start(); }; // Continuous restart
-        }
-
-        // --- 6. Event Handlers ---
-        async function sendCommand(command, payload) {
-            try {
-                const res = await fetch('/api/command', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ command, payload: payload || {} })
-                });
-                return await res.json();
-            } catch (e) { return { status: 'ERROR', error: String(e) }; }
-        }
-
-        document.getElementById('btnMicToggle').addEventListener('click', async () => {
-            await initMicrophone();
-            await sendCommand('START_LISTENING');
-            if (recognition) {
-                try { recognition.start(); } catch (e) {}
-            }
+    <div class="right">
+      <div><span class="label">MIC </span><span id="mic-line" class="bad">UNKNOWN</span></div>
+      <div><span class="label">STT </span><span id="stt-line">—</span></div>
+      <div><span class="label">TTS </span><span id="tts-line">—</span></div>
+      <div><span class="label">MODEL </span><span id="model-line">—</span></div>
+      <div><span class="label">RUNTIME </span><span id="runtime-line">—</span></div>
+    </div>
+  </div>
+  <div id="controls">
+    <button id="btnMic">🎙 START</button>
+    <button id="btnListen">LISTENING: OFF</button>
+    <input id="cmdInput" type="text" placeholder="type a command — or say “Zerion, …”" autocomplete="off">
+    <button id="btnSend">SEND</button>
+  </div>
+</div>
+
+<div id="transcript"></div>
+<div id="webgl-fallback-note" style="display:none">2D ORB FALLBACK — WEBGL UNAVAILABLE</div>
+
+<script>
+"use strict";
+/* =========================================================================
+ * ZERION X — COGNITIVE CORE 3D ORB
+ * The UI observes the runtime. It decides nothing: no goals, no reasoning,
+ * no model selection, no permissions. Every status shown comes from the
+ * /api/ui-state snapshot or the /api/stream event feed — never hard-coded.
+ * ======================================================================= */
+
+/* ---------- device tier (performance budget) ---------- */
+function detectTier() {
+  const nav = navigator;
+  const mem = (nav.deviceMemory || 4);
+  const cores = (nav.hardwareConcurrency || 4);
+  if (mem <= 2 || cores <= 2) return "low";
+  if (mem <= 4 || cores <= 4) return "mid";
+  return "high";
+}
+const TIER = detectTier();
+const PARTICLE_BUDGET = TIER === "high" ? 2200 : (TIER === "mid" ? 1200 : 600);
+const INNER_BUDGET = Math.max(120, Math.floor(PARTICLE_BUDGET * 0.22));
+
+/* ---------- real runtime state (never fabricated) ---------- */
+let uiState = { presentation: {}, voice: {}, models: {}, system: {}, network: {} };
+let audioRms = 0;          // real mic RMS (float 0..1) from the analyser
+let serverRms = 0;         // server-reported amplitude while SPEAKING
+let lastRmsPost = 0;       // throttled POST to /api/voice/audio-rms
+let micAvailable = false;
+let micError = null;
+let listening = false;     // engine LISTENING state (real, from snapshot)
+let recognition = null;
+let recognitionStopped = false;
+
+const $ = (id) => document.getElementById(id);
+const stateLine = $("state-line");
+const micLine = $("mic-line");
+const sttLine = $("stt-line");
+const ttsLine = $("tts-line");
+const modelLine = $("model-line");
+const runtimeLine = $("runtime-line");
+const modeLine = $("mode-line");
+const transcriptBox = $("transcript");
+
+/* ---------- orb state -> animation params ---------- */
+function orbParams(state, micStatus) {
+  // state: presentation.runtime_state (REAL) — e.g. IDLE / LISTENING /
+  // THINKING / EXECUTING / SPEAKING / ERROR / DEGRADED / OFFLINE
+  const p = { rot: 0.12, pulse: 0.035, speed: 1.0, swirl: 0.0, audioGain: 0.0,
+              alpha: 1.0, color: [0.12, 0.52, 1.0], inner: 1.0, err: false };
+  const s = String(state || "IDLE").toUpperCase();
+  if (s === "BOOTING") { p.rot = 0.4; p.pulse = 0.05; p.speed = 0.6; }
+  else if (s === "LISTENING") {
+    p.rot = 0.45; p.pulse = 0.075; p.speed = 1.4; p.audioGain = 0.2;
+  } else if (s === "TRANSCRIBING") { p.rot = 0.7; p.swirl = 1.0; p.pulse = 0.06; p.speed = 1.8; }
+  else if (s === "THINKING") { p.rot = 0.8; p.swirl = 1.0; p.pulse = 0.05; p.speed = 2.2; }
+  else if (s === "EXECUTING") { p.rot = 0.6; p.pulse = 0.11; p.speed = 2.6; }
+  else if (s === "SPEAKING") { p.rot = 0.5; p.pulse = 0.09; p.speed = 1.6; p.audioGain = 0.4; }
+  else if (s === "LEARNING" || s === "OBSERVING" || s === "QUESTIONING" ||
+           s === "INVESTIGATING" || s === "EXPERIMENTING" || s === "VERIFYING" ||
+           s === "DEVELOPING") { p.rot = 0.7; p.pulse = 0.07; p.speed = 1.9; p.swirl = 0.6; }
+  else if (s === "ERROR") { p.rot = 0.1; p.pulse = 0.02; p.speed = 0.4; p.alpha = 0.55; p.err = true; }
+  else if (s === "DEGRADED" || s === "RECOVERING") { p.rot = 0.2; p.pulse = 0.04; p.speed = 0.8; p.alpha = 0.7; }
+  else if (s === "OFFLINE") { p.rot = 0.06; p.pulse = 0.02; p.speed = 0.3; p.alpha = 0.5; }
+  // REAL mic health gates the LISTENING claim: without an active mic the orb
+  // shows a calmer pattern — the runtime still decides; the UI only renders.
+  if (micStatus === "MIC_UNAVAILABLE" && s === "LISTENING") {
+    p.rot = 0.15; p.pulse = 0.02; p.alpha = 0.6; p.audioGain = 0.0;
+  }
+  return p;
+}
+
+/* ---------- 3D orb data ---------- */
+const TAU = Math.PI * 2;
+function buildPoints(n, radius, spread) {
+  const pos = new Float32Array(n * 3);
+  const phase = new Float32Array(n);
+  const rnd = mulberry32(0x5EED + n);
+  for (let i = 0; i < n; i++) {
+    // uniform-ish distribution on the sphere (fibonacci lattice + jitter)
+    const y = 1 - (i / (n - 1)) * 2;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    const th = i * 2.399963;
+    const jx = (rnd() - 0.5) * spread;
+    const jy = (rnd() - 0.5) * spread;
+    const jz = (rnd() - 0.5) * spread;
+    pos[i * 3] = r * Math.cos(th) * radius + jx;
+    pos[i * 3 + 1] = y * radius + jy;
+    pos[i * 3 + 2] = r * Math.sin(th) * radius + jz;
+    phase[i] = rnd();
+  }
+  return { pos, phase, n };
+}
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* ---------- WebGL renderer ---------- */
+let gl = null;
+let glProg = null;
+let glCore = null;
+let glInner = null;
+const FALLBACK = { active: false, ctx: null, core: null, inner: null };
+
+const VERT = `
+attribute vec3 aPos;
+attribute float aPhase;
+uniform mat4 uProj;
+uniform float uTime;
+uniform float uRot;
+uniform float uTilt;
+uniform float uState;
+uniform float uAudio;
+uniform float uPulse;
+uniform float uPointScale;
+uniform float uAlphaMul;
+varying float vAlpha;
+varying float vPhase;
+void main() {
+  vec3 p = aPos;
+  float ph = aPhase * 6.2831;
+  float t = uTime;
+  // breathing (idle always alive; never static)
+  float breath = 1.0 + uPulse * sin(t * 2.0 + ph);
+  if (uState > 0.5 && uState < 1.5) {          // LISTENING / audio-reactive
+    breath *= 1.0 + uAudio * 0.22;
+  } else if (uState > 1.5 && uState < 2.5) {   // THINKING / TRANSCRIBING: inward swirl
+    float a = t * 1.5 + ph;
+    float c = cos(a); float s = sin(a);
+    p.xz = vec2(c * p.x - s * p.z, s * p.x + c * p.z);
+    p *= 1.0 - 0.10 * (0.5 + 0.5 * sin(t * 3.0 + ph * 2.0));
+  } else if (uState > 2.5 && uState < 3.5) {   // EXECUTING: outward energy
+    breath *= 1.0 + 0.14 * (0.5 + 0.5 * sin(t * 5.0 + ph * 3.3));
+  } else if (uState > 3.5 && uState < 4.5) {   // SPEAKING
+    breath *= 1.0 + (0.10 + 0.28 * uAudio) * (0.5 + 0.5 * sin(t * 9.0 + ph * 1.3));
+  }
+  p *= breath;
+  // slow rotation
+  float rot = uRot * t;
+  float cr = cos(rot); float sr = sin(rot);
+  p.xz = vec2(cr * p.x - sr * p.z, sr * p.x + cr * p.z);
+  // tilt
+  float ct = cos(uTilt); float st = sin(uTilt);
+  p.yz = vec2(ct * p.y - st * p.z, st * p.y + ct * p.z);
+  gl_Position = uProj * vec4(p, 1.0);
+  float depth = 1.0 / (1.0 - gl_Position.z * 0.55);
+  gl_PointSize = uPointScale * depth * (0.75 + 0.5 * aPhase);
+  vAlpha = uAlphaMul * (0.5 + 0.5 * aPhase);
+  vPhase = aPhase;
+}
+`;
+const FRAG = `
+precision mediump float;
+varying float vAlpha;
+varying float vPhase;
+uniform vec3 uColor;
+uniform float uTime;
+uniform float uGlow;
+void main() {
+  float d = length(gl_PointCoord - 0.5);
+  float a = smoothstep(0.5, 0.06, d) * vAlpha;
+  vec3 col = uColor * (0.65 + 0.45 * sin(uTime * 3.0 + vPhase * 40.0));
+  gl_FragColor = vec4(col * uGlow, a);
+}
+`;
+
+function compileShader(type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    throw new Error("shader: " + gl.getShaderInfoLog(sh));
+  }
+  return sh;
+}
+function buildProgram() {
+  const p = gl.createProgram();
+  gl.attachShader(p, compileShader(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(p, compileShader(gl.FRAGMENT_SHADER, FRAG));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    throw new Error("program: " + gl.getProgramInfoLog(p));
+  }
+  gl.useProgram(p);
+  return p;
+}
+function makeMesh(n, radius, spread) {
+  const d = buildPoints(n, radius, spread);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, d.pos, gl.STATIC_DRAW);
+  const phBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, phBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, d.phase, gl.STATIC_DRAW);
+  return { n, posBuf: buf, phBuf };
+}
+function projMatrix() {
+  // simple perspective: fov ~50deg, zNear 0.1, zFar 10
+  const f = 1.0 / Math.tan((50 * Math.PI) / 360);
+  const n = 0.1, fz = 10.0, a = gl.canvas.width / Math.max(1, gl.canvas.height);
+  return new Float32Array([
+    f / a, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, (fz + n) / (n - fz), -1,
+    0, 0, (2 * fz * n) / (n - fz), 0,
+  ]);
+}
+
+function initGL() {
+  const canvas = document.createElement("canvas");
+  $("orb-stage").appendChild(canvas);
+  const attrs = { antialias: true, alpha: false, powerPreference: "high-performance" };
+  gl = canvas.getContext("webgl", attrs) || canvas.getContext("experimental-webgl", attrs);
+  if (!gl) { initFallback(canvas); return; }
+  glProg = buildProgram();
+  glCore = makeMesh(PARTICLE_BUDGET, 1.0, 0.035);
+  glInner = makeMesh(INNER_BUDGET, 0.42, 0.02);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+  gl.clearColor(0, 0, 0, 1);
+  resize();
+  window.addEventListener("resize", resize);
+}
+function resize() {
+  if (!gl) return;
+  const c = gl.canvas;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = Math.max(1, Math.floor(c.clientWidth * dpr));
+  const h = Math.max(1, Math.floor(c.clientHeight * dpr));
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  gl.viewport(0, 0, w, h);
+}
+function drawCloud(mesh, params, u, stateCode) {
+  gl.useProgram(glProg);
+  gl.bindBuffer(gl.ARRAY_BUFFER, mesh.posBuf);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, mesh.phBuf);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 0, 0);
+  gl.uniformMatrix4fv(gl.getUniformLocation(glProg, "uProj"), false, u.proj);
+  gl.uniform1f(gl.getUniformLocation(glProg, "uTime"), u.time);
+  gl.uniform1f(gl.getUniformLocation(glProg, "uRot"), params.rot * params.speed);
+  gl.uniform1f(gl.getUniformLocation(glProg, "uTilt"), 0.35);
+  gl.uniform1f(gl.getUniformLocation(glProg, "uState"), stateCode);
+  gl.uniform1f(gl.getUniformLocation(glProg, "uAudio"), u.audio);
+  gl.uniform1f(gl.getUniformLocation(glProg, "uPulse"), params.pulse);
+  gl.uniform1f(gl.getUniformLocation(glProg, "uPointScale"), u.pointScale);
+  gl.uniform1f(gl.getUniformLocation(glProg, "uAlphaMul"), params.alpha);
+  gl.uniform3f(gl.getUniformLocation(glProg, "uColor"), params.color[0], params.color[1], params.color[2]);
+  gl.uniform1f(gl.getUniformLocation(glProg, "uGlow"), u.glow);
+  gl.drawArrays(gl.POINTS, 0, mesh.n);
+}
+function renderGL(now, params, stateCode, audio) {
+  const t = now / 1000;
+  const u = {
+    proj: projMatrix(), time: t, audio: Math.min(1, audio),
+    pointScale: (TIER === "low" ? 5.5 : 7.0) * (gl.canvas.height / 900),
+    glow: params.err ? 0.5 : 1.0,
+  };
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  // outer core
+  drawCloud(glCore, params, u, stateCode);
+  // inner energy core (brighter, faster)
+  const innerParams = {
+    rot: params.rot * 2.2, pulse: params.pulse * 1.5, speed: params.speed,
+    alpha: Math.min(1, params.alpha + 0.15), color: [0.45, 0.75, 1.0],
+  };
+  u.glow = 1.25;
+  u.pointScale = u.pointScale * 0.8;
+  drawCloud(glInner, innerParams, u, stateCode);
+}
+
+/* ---------- 2D fallback renderer (WebGL unavailable) ---------- */
+function initFallback(canvas) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  FALLBACK.active = true;
+  FALLBACK.ctx = ctx;
+  FALLBACK.core = buildPoints(Math.min(PARTICLE_BUDGET, 700), 1.0, 0.03);
+  FALLBACK.inner = buildPoints(Math.min(INNER_BUDGET, 160), 0.42, 0.02);
+  $("webgl-fallback-note").style.display = "block";
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const resize2d = () => {
+    canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+    canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+  };
+  resize2d();
+  window.addEventListener("resize", resize2d);
+}
+function render2D(now, params, stateCode, audio) {
+  const ctx = FALLBACK.ctx;
+  const w = ctx.canvas.width, h = ctx.canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  const cx = w / 2, cy = h / 2;
+  const radius = Math.min(w, h) * 0.34;
+  const fov = 2.2;
+  const rot = params.rot * params.speed * (now / 1000);
+  const tilt = 0.35;
+  const breath = 1 + params.pulse * Math.sin((now / 1000) * 2);
+  const drawSet = (set, size, bright) => {
+    for (let i = 0; i < set.n; i++) {
+      let x = set.pos[i * 3], y = set.pos[i * 3 + 1], z = set.pos[i * 3 + 2];
+      const ph = set.phase[i] * TAU;
+      let br = breath;
+      if (stateCode > 0.5 && stateCode < 1.5) br *= 1 + audio * 0.22;
+      else if (stateCode > 1.5 && stateCode < 2.5) {
+        const a = (now / 1000) * 1.5 + ph;
+        const nx = x * Math.cos(a) - z * Math.sin(a);
+        z = x * Math.sin(a) + z * Math.cos(a); x = nx;
+        br *= 1 - 0.10 * (0.5 + 0.5 * Math.sin((now / 1000) * 3 + ph * 2));
+      } else if (stateCode > 2.5 && stateCode < 3.5) {
+        br *= 1 + 0.14 * (0.5 + 0.5 * Math.sin((now / 1000) * 5 + ph * 3.3));
+      } else if (stateCode > 3.5 && stateCode < 4.5) {
+        br *= 1 + (0.10 + 0.28 * audio) * (0.5 + 0.5 * Math.sin((now / 1000) * 9 + ph * 1.3));
+      }
+      x *= br; y *= br; z *= br;
+      const cr = Math.cos(rot), sr = Math.sin(rot);
+      const rx = cr * x - sr * z, rz = sr * x + cr * z;
+      const ct = Math.cos(tilt), st = Math.sin(tilt);
+      const ry = ct * y - st * rz, rz2 = st * y + ct * rz;
+      const scale = fov / (fov - rz2 / radius);
+      const px = cx + rx * radius * scale;
+      const py = cy + ry * radius * scale;
+      const alpha = (params.alpha * (0.35 + 0.65 * set.phase[i])) * Math.min(1, scale);
+      ctx.fillStyle = "rgba(30,144,255," + alpha.toFixed(3) + ")";
+      const s = size * scale * (0.7 + 0.5 * set.phase[i]);
+      ctx.fillRect(px - s / 2, py - s / 2, s, s);
+    }
+  };
+  drawSet(FALLBACK.core, TIER === "low" ? 2.6 : 3.2, 1.0);
+  drawSet(FALLBACK.inner, 2.2, 1.3);
+}
+
+/* ---------- state code for shader branches ---------- */
+function stateCode(state) {
+  const s = String(state || "IDLE").toUpperCase();
+  if (s === "LISTENING") return 1.0;
+  if (s === "TRANSCRIBING" || s === "THINKING") return 2.0;
+  if (s === "EXECUTING") return 3.0;
+  if (s === "SPEAKING") return 4.0;
+  return 0.0; // idle / boot / error / degraded / offline (base behavior)
+}
+
+/* ---------- render loop (paused when hidden) ---------- */
+let lastFrame = 0;
+function frame(now) {
+  if (document.hidden) { lastFrame = 0; return; }
+  requestAnimationFrame(frame);
+  const snap = uiState.presentation || {};
+  // Full perception telemetry (incl. canonical mic_status) lives under
+  // voice.perception; presentation.voice_perception is the gated summary.
+  const vpFull = (uiState.voice && uiState.voice.perception) || {};
+  const micStatus = vpFull.mic_status ||
+                    (snap.voice_perception || {}).mic_status || "UNKNOWN";
+  const state = snap.runtime_state || "IDLE";
+  const p = orbParams(state, micStatus);
+  const audio = Math.max(
+    Math.min(1, audioRms),
+    state === "SPEAKING" ? Math.min(1, serverRms || 0) : 0
+  );
+  if (gl) renderGL(now, p, stateCode(state), audio);
+  else if (FALLBACK.active) render2D(now, p, stateCode(state), audio);
+}
+
+/* ---------- HUD (real state only) ---------- */
+function renderHud() {
+  const snap = uiState.presentation || {};
+  const sys = uiState.system || {};
+  const voice = uiState.voice || {};
+  const models = uiState.models || {};
+  const vp = (voice.perception && Object.keys(voice.perception).length
+              ? voice.perception : snap.voice_perception) || {};
+
+  stateLine.textContent = snap.state_label || snap.runtime_state || "UNKNOWN";
+
+  // MICROPHONE — the displayed claim must match the real pipeline.
+  const micStatus = vp.mic_status || "UNKNOWN";
+  micLine.textContent = micStatus;
+  micLine.className = micStatus === "LISTENING" ? "ok" :
+    (micStatus === "MIC_UNAVAILABLE" || micStatus === "MIC_ERROR") ? "bad" : "";
+  if (!micAvailable && !micError && micStatus === "MIC_UNAVAILABLE") {
+    // real reason from the runtime when the browser has no permission either
+    const reason = vp.reason || (vp.mic || {}).reason;
+    micLine.title = reason || "";
+  }
+
+  const stt = (voice.stt || {});
+  sttLine.textContent = stt.status || "—";
+  if (stt.reason) sttLine.title = stt.reason;
+
+  const tts = (voice.tts || {});
+  ttsLine.textContent = tts.status || "—";
+  if (tts.reason) ttsLine.title = tts.reason;
+
+  const ms = models.status || "UNKNOWN";
+  const selected = (models.selected || []).join(", ");
+  modelLine.textContent = ms + (models.available > 0 && selected ? " · " + selected : "");
+  modelLine.title = (models.dir || "") + " (" + (models.discovered || 0) + " discovered)";
+
+  const rs = (sys.runtime_status || "UNKNOWN");
+  runtimeLine.textContent = rs + (sys.offline_mode ? " · " + sys.offline_mode : "");
+  modeLine.textContent = "MODE: " + (sys.offline_mode === "OFFLINE_ONLY" ? "LOCAL" : (sys.offline_mode || "—"));
+
+  // Mic button reflects real listening state.
+  const btn = $("btnMic");
+  const btnListen = $("btnListen");
+  const isListening = vp.is_listening === true || micStatus === "LISTENING";
+  btn.textContent = micAvailable ? "🎙 ACTIVE" : "🎙 START";
+  btn.classList.toggle("active", !!micAvailable);
+  btnListen.textContent = isListening ? "LISTENING: ON" : "LISTENING: OFF";
+  btnListen.classList.toggle("active", isListening);
+  if (micError) { micLine.textContent = "MIC_ERROR"; micLine.title = micError; }
+}
+
+function pushTranscript(kind, text) {
+  const el = document.createElement("div");
+  el.className = "t " + kind;
+  el.textContent = text;
+  transcriptBox.prepend(el);
+  while (transcriptBox.children.length > 8) transcriptBox.removeChild(transcriptBox.lastChild);
+}
+
+/* ---------- server feed ---------- */
+async function fetchState() {
+  try {
+    const r = await fetch("/api/ui-state", { cache: "no-store" });
+    if (r.ok) { uiState = await r.json(); renderHud(); }
+  } catch (e) { /* server unreachable: keep last known state */ }
+}
+function attachStream() {
+  if (!window.EventSource) return;
+  const es = new EventSource("/api/stream");
+  es.onmessage = (ev) => {
+    try {
+      const rec = JSON.parse(ev.data);
+      const et = rec.event_type || "";
+      const payload = rec.payload || {};
+      if (et === "VOICE_TRANSCRIPT_FINAL" && payload.transcript) {
+        pushTranscript("user", "YOU: " + payload.transcript);
+      } else if (et === "VOICE_RESPONSE_READY" && payload.response) {
+        pushTranscript("zerion", "ZERION: " + payload.response);
+      } else if (et === "WAKE_WORD_DETECTED") {
+        pushTranscript("user", "WAKE: " + (payload.matched_phrase || ""));
+      } else if (et === "WAKE_WORD_MISDETECTED") {
+        pushTranscript("err", "no wake phrase — say “Zerion”");
+      } else if (et === "VOICE_STT_UNAVAILABLE") {
+        pushTranscript("err", "STT unavailable: " + (payload.reason || ""));
+      } else if (et === "VOICE_MIC_UNAVAILABLE") {
+        pushTranscript("err", "mic unavailable: " + (payload.reason || ""));
+      } else if (et === "VOICE_BARGE_IN") {
+        pushTranscript("user", "INTERRUPTED");
+      }
+    } catch (e) { /* ignore malformed frame */ }
+  };
+}
+
+/* ---------- REAL microphone capture (browser) ---------- */
+let audioCtx = null;
+let analyser = null;
+let micStream = null;
+
+async function initMicrophone() {
+  if (micStream) return true;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const source = audioCtx.createMediaStreamSource(micStream);
+    source.connect(analyser);
+    micAvailable = true;
+    micError = null;
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    let lastPost = 0;
+    (function track() {
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = (data[i] - 128) / 128;
+        sum += v * v;
+      }
+      audioRms = Math.sqrt(sum / data.length);
+      // Real audio energy streamed to the server so the runtime's own VAD /
+      // barge-in sees the same audio the browser hears (throttled ~10 Hz).
+      const now = performance.now();
+      if (now - lastPost > 100) {
+        lastPost = now;
+        fetch("/api/voice/audio-rms", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rms: Math.round(audioRms * 1000) / 1000 }),
+        }).catch(() => {});
+      }
+      requestAnimationFrame(track);
+    })();
+    return true;
+  } catch (e) {
+    micAvailable = false;
+    micError = (e && e.name) ? e.name + ": " + (e.message || "permission denied") : String(e);
+    micLine.textContent = "MIC_ERROR";
+    micLine.className = "bad";
+    micLine.title = micError;
+    pushTranscript("err", "microphone unavailable: " + micError);
+    return false;
+  }
+}
+
+/* ---------- local STT via Web Speech API (offline where available) ---------- */
+function startRecognition() {
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRec || recognition) return;
+  recognitionStopped = false;
+  recognition = new SpeechRec();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = "en-US";
+
+  recognition.onresult = async (event) => {
+    const last = event.results[event.results.length - 1];
+    const text = last[0].transcript;
+    if (last.isFinal) {
+      pushTranscript("user", "YOU: " + text);
+      try {
+        const res = await fetch("/api/voice/process", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ transcript: text }),
         });
-
-        // Pulse pause/resume toggle through the controlled CommandAPI.
-        let pulsePaused = false;
-        document.getElementById('btnPulse').addEventListener('click', async () => {
-            const cmd = pulsePaused ? 'RESUME_PULSE' : 'PAUSE_PULSE';
-            const r = await sendCommand(cmd);
-            if (r.status === 'OK') {
-                pulsePaused = !pulsePaused;
-                document.getElementById('btnPulse').innerText = pulsePaused ? 'Pulse: Resume' : 'Pulse: Pause';
+        if (res.ok) {
+          const data = await res.json();
+          if (data.cognitive_response) {
+            pushTranscript("zerion", "ZERION: " + data.cognitive_response);
+            if (data.tts_status === "AUDIO_GENERATED") {
+              speakLocal(data.cognitive_response);
             }
-            await syncState();
-        });
-
-        // Offline mode toggle (OFFLINE_ONLY <-> AUTO) through the CommandAPI.
-        let offlineOnly = false;
-        document.getElementById('btnOffline').addEventListener('click', async () => {
-            const mode = offlineOnly ? 'AUTO' : 'OFFLINE_ONLY';
-            const r = await sendCommand('SET_OFFLINE_MODE', { mode });
-            if (r.status === 'OK') {
-                offlineOnly = !offlineOnly;
-                document.getElementById('btnOffline').innerText = offlineOnly ? 'Offline: ONLY' : 'Offline: AUTO';
-            }
-            await syncState();
-        });
-
-        attachEventStream();
-
-        document.getElementById('btnSimWake').addEventListener('click', async () => {
-            const res = await fetch('/api/voice/process', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ transcript: "Hey Zerion" })
-            });
-            await syncState();
-        });
-
-        document.getElementById('btnSimTask').addEventListener('click', async () => {
-            const res = await fetch('/api/voice/process', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ transcript: "Zerion, open my tasks and check active objectives." })
-            });
-            if (res.ok) {
-                const data = await res.json();
-                if (data.cognitive_response && 'speechSynthesis' in window) {
-                    const utter = new SpeechSynthesisUtterance(data.cognitive_response);
-                    utter.onstart = () => { audioRms = 0.85; };
-                    utter.onend = () => { audioRms = 0.0; };
-                    window.speechSynthesis.speak(utter);
-                }
-            }
-            await syncState();
-        });
-
-        // HUD toggles the Cognitive Core panel (real Slice 1 state)
-        document.getElementById('hudControl').addEventListener('click', () => {
-            const panel = document.getElementById('cognitivePanel');
-            const wasHidden = panel.classList.contains('hidden');
-            panel.classList.toggle('hidden');
-            if (wasHidden) syncCognitive();
-        });
-
-        document.getElementById('panelClose').addEventListener('click', () => {
-            document.getElementById('cognitivePanel').classList.add('hidden');
-        });
-
-        // Legacy tray actions — guarded so missing buttons never crash the page.
-        const flywheelBtn = document.getElementById('btnFlywheel');
-        if (flywheelBtn) {
-            flywheelBtn.addEventListener('click', async () => {
-                await fetch('/api/cycle', { method: 'POST' });
-                await syncState();
-                await syncCognitive();
-            });
+          }
         }
+      } catch (e) { /* server offline */ }
+    } else {
+      const partial = text;
+      if (partial) {
+        fetch("/api/voice/partial", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ transcript: partial }),
+        }).catch(() => {});
+      }
+    }
+  };
 
-        const introspectBtn = document.getElementById('btnIntrospect');
-        if (introspectBtn) {
-            introspectBtn.addEventListener('click', async () => {
-                const res = await fetch('/api/level/7');
-                const data = await res.json();
-                alert(`Level 7 Introspection:\nQuestion: ${data.question}\nAcceleration: ${data.current_learning_acceleration}\nOptimization: ${data.meta_learning_optimization}`);
-            });
-        }
-    </script>
+  recognition.onerror = (e) => {
+    // Permission/network errors must surface — never silently pretend.
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      recognitionStopped = true;
+      micLine.textContent = "MIC_ERROR";
+      micLine.className = "bad";
+      micLine.title = "speech recognition blocked: " + e.error;
+      pushTranscript("err", "speech recognition blocked (" + e.error + ")");
+      try { recognition.stop(); } catch (err) {}
+    } else if (e.error === "network") {
+      recognitionStopped = true;
+      pushTranscript("err", "speech recognition network error — local STT required");
+    }
+  };
+  recognition.onend = () => {
+    // Restart ONLY if we did not intentionally stop and no fatal error.
+    if (!recognitionStopped && !document.hidden) {
+      try { recognition.start(); } catch (err) {}
+    }
+  };
+  try { recognition.start(); } catch (e) {}
+}
+function stopRecognition() {
+  recognitionStopped = true;
+  if (recognition) {
+    try { recognition.onend = null; recognition.stop(); } catch (e) {}
+    recognition = null;
+  }
+}
+
+/* ---------- local TTS via speechSynthesis (real browser output) ---------- */
+function speakLocal(text) {
+  if (!("speechSynthesis" in window)) return;
+  const u = new SpeechSynthesisUtterance(text);
+  u.onstart = () => { serverRms = 0.55; };
+  u.onend = () => { serverRms = 0; };
+  u.onerror = () => { serverRms = 0; };
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(u);
+}
+
+/* ---------- controls ---------- */
+async function postCommand(command, payload) {
+  try {
+    const r = await fetch("/api/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command, payload: payload || {} }),
+    });
+    return await r.json();
+  } catch (e) { return { status: "ERROR", error: String(e) }; }
+}
+
+$("btnMic").addEventListener("click", async () => {
+  const ok = await initMicrophone();
+  if (ok) {
+    await postCommand("START_LISTENING", {});
+    startRecognition();
+  }
+  await fetchState();
+});
+
+$("btnListen").addEventListener("click", async () => {
+  const snap = (uiState.presentation || {});
+  const vp = snap.voice_perception || {};
+  const isListening = vp.is_listening === true;
+  if (isListening) {
+    await postCommand("STOP_LISTENING", {});
+    stopRecognition();
+  } else {
+    const ok = await initMicrophone();
+    if (ok) { await postCommand("START_LISTENING", {}); startRecognition(); }
+  }
+  await fetchState();
+});
+
+$("btnSend").addEventListener("click", sendCommandText);
+$("cmdInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sendCommandText();
+});
+async function sendCommandText() {
+  const input = $("cmdInput");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  pushTranscript("user", "YOU: " + text);
+  try {
+    const r = await fetch("/api/voice/process", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: text }),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      if (data.cognitive_response) {
+        pushTranscript("zerion", "ZERION: " + data.cognitive_response);
+      }
+    }
+  } catch (e) { pushTranscript("err", "server unreachable"); }
+}
+
+/* ---------- boot ---------- */
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) { lastFrame = 0; }
+});
+initGL();
+attachStream();
+fetchState();
+setInterval(fetchState, 2000);
+requestAnimationFrame(frame);
+</script>
 </body>
 </html>

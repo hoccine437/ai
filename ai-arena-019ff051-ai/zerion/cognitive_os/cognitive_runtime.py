@@ -306,7 +306,8 @@ class CognitiveRuntime:
                  cpu_degraded_threshold: float = 60.0,
                  stale_event_window_s: float = 60.0,
                  experiment_permissions: Optional[ExperimentPermissions] = None,
-                 models_dir: Optional[str] = None):
+                 models_dir: Optional[str] = None,
+                 security: Optional[Any] = None):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -432,9 +433,12 @@ class CognitiveRuntime:
         self.genome_manager = GenomeManager(store=self.genome_store)
         self.snapshot_store = SnapshotStore(
             db_path=str(self.data_dir / "snapshots.db"), strict_load=True)
+        # The canonical SecurityBoundary (when provided) is wired into the
+        # self-modification gate: self-modification can never bypass it.
         self.self_modification_gate = SelfModificationGate(
             sandbox=self.capability_sandbox,
-            policy=GatePolicy(allow_low_auto=True, allow_medium_auto=False))
+            policy=GatePolicy(allow_low_auto=True, allow_medium_auto=False),
+            security=security)
 
         # Slice 8: CognitivePulse — the persistent, event-driven coordinator.
         # It owns no engines: it reacts to bus events, schedules work through
@@ -487,6 +491,25 @@ class CognitiveRuntime:
             state.runtime_status = RuntimeStatus.RECOVERING
             state.recovery_error = f"{type(e).__name__}: {e}"
             return state
+
+    async def tick_pulse(self, budget: int = 1) -> int:
+        """Drive the CognitivePulse scheduler for up to ``budget`` tick passes.
+
+        The pulse executes at most one work item per tick and returns cheaply
+        when idle; a bounded budget lets callers (flywheel cycles, the engine's
+        heartbeat cadence, UI server loops) drain queued runtime work without
+        unbounded loops. Returns the number of tick passes actually executed.
+        """
+        executed = 0
+        for _ in range(max(0, budget)):
+            if not self._running:
+                break
+            if self.cognitive_pulse.state not in (
+                    PulseLifecycle.RUNNING, PulseLifecycle.DEGRADED):
+                break
+            await self.cognitive_pulse.tick()
+            executed += 1
+        return executed
 
     async def start(self) -> None:
         if self._running:

@@ -485,7 +485,7 @@ class TestSelection(unittest.TestCase):
 # 6. OFFLINE-ONLY MODE
 # ---------------------------------------------------------------------------
 
-class TestOfflineMode(unittest.TestCase):
+class TestOfflineMode(unittest.IsolatedAsyncioTestCase):
     async def test_offline_only_selects_local_gguf_over_configured_cloud(self):
         with tempfile.TemporaryDirectory() as tmp:
             make_models_dir(tmp, "local_model.gguf")
@@ -530,7 +530,7 @@ class TestOfflineMode(unittest.TestCase):
 # 7. FAILOVER & FAILURE HANDLING
 # ---------------------------------------------------------------------------
 
-class TestFailover(unittest.TestCase):
+class TestFailover(unittest.IsolatedAsyncioTestCase):
     async def test_primary_failure_falls_back_to_compatible_provider(self):
         with tempfile.TemporaryDirectory() as tmp:
             rt = make_router(tmp)

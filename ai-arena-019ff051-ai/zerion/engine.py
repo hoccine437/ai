@@ -73,14 +73,13 @@ from zerion.cognition.adversarial import AdversarialEngine
 
 # --- Evidence & Reality Sandbox Experiments ---
 from zerion.evidence.engine import EvidenceEngine
-from zerion.evidence.claim import EvidenceItem, VerificationMethod
 from zerion.experiments.engine import ExperimentEngine, ExperimentOutcome
 from zerion.experiments.design import ExperimentDesign
 from zerion.experiments.sandbox import ExecutionSandbox
 
-# --- Memory & Distillation ---
+# --- Memory & Distillation (legacy store kept as a deprecated read-only view;
+# the live flywheel writes episodes through the canonical Slice 4 stores) ---
 from zerion.memory.developmental_store import DevelopmentalMemoryStore
-from zerion.memory.episodic import Episode
 
 # --- Capability Birth 3.0 ---
 from zerion.capabilities.detector import CapabilityGapDetector, CapabilityGap
@@ -94,7 +93,6 @@ from zerion.missions.lifecycle import MissionLifecycleManager
 from zerion.missions.mission import Mission, MissionStep
 from zerion.evolution.plasticity import CognitivePlasticityManager
 from zerion.evolution.self_modification import ControlledSelfModificationEngine
-from zerion.evolution.ascension import AscensionEngine
 
 from zerion.benchmarks.runner import BenchmarkRunner
 from zerion.benchmarks.scoreboard import DevelopmentalScoreboard
@@ -115,13 +113,13 @@ from zerion.runtime.daemon import AutonomyLevel, DevelopmentDaemon, BackgroundDi
 from zerion.integration.android.mobile_runtime import MobileResourceGovernor
 from zerion.integration.termux_adapter import TermuxAdapter
 from zerion.integration.offline_fallback import OfflineFallbackManager
-from zerion.entity.state import CognitiveEntityStateStore, EntityLifecycleState
+from zerion.entity.state import CognitiveEntityStateStore
 from zerion.self_model.self_predictor import SelfPredictor
 from zerion.architecture.autophagy import CognitiveAutophagyEngine
 from zerion.intelligence_forge.organism_runtime.foundry import IntelligenceFoundry, FoundryCycleTelemetry
-from zerion.cognitive_species.cognitive_pulse import CognitiveSpeciesRuntime, SpeciesCycleTrace
-from zerion.model_providers.router import CognitiveRouter
 from zerion.runtime.evidence import collect_runtime_evidence
+from zerion.cognitive_os.evidence import Evidence as CognitiveEvidence, EvidenceMode, EvidenceVerdict, Provenance
+from zerion.cognitive_os.episode import ExperienceEpisode, EpisodeMode, EpisodeStatus
 
 
 def load_dotenv_files(environ=None, extra_dirs=None) -> None:
@@ -207,8 +205,12 @@ class AscendantEngine:
         self.telemetry = CognitiveTelemetryLogger(log_path=str(self.data_dir / "telemetry.jsonl"))
 
         # 2. Identity Core & Invariants & Entity State
+        # ONE canonical identity: the entity store derives every identity value
+        # from the IdentityCore above — a second identity is never created.
         self.identity = IdentityCore(storage_path=str(self.data_dir / "identity.json"))
-        self.entity_state = CognitiveEntityStateStore(db_path=str(self.data_dir / "entity_state.db"))
+        self.entity_state = CognitiveEntityStateStore(
+            db_path=str(self.data_dir / "entity_state.db"),
+            identity=self.identity)
         self.self_predictor = SelfPredictor()
         self.autophagy = CognitiveAutophagyEngine(db_path=str(self.data_dir / "autophagy.db"))
 
@@ -216,7 +218,9 @@ class AscendantEngine:
         self.world = WorldModel(db_path=str(self.data_dir / "world_model.db"))
         self.world_tracker = WorldTracker(self.world)
         self.unknown_space = UnknownSpaceEngine(db_path=str(self.data_dir / "unknown_space.db"))
-        self.sandbox = ExecutionSandbox()
+        # The legacy execution sandbox is wired to the canonical SecurityBoundary:
+        # every sandboxed execution is authorized (and audited) before running.
+        self.sandbox = ExecutionSandbox(security=self.security)
         self.counterfactual = CounterfactualEngine(sandbox=self.sandbox)
         self.architecture_search = ArchitectureSearchEngine(db_path=str(self.data_dir / "architecture_search.db"))
 
@@ -267,13 +271,12 @@ class AscendantEngine:
         # 12. Missions & Evolution
         self.missions = MissionLifecycleManager(db_path=str(self.data_dir / "missions.db"))
         self.plasticity = CognitivePlasticityManager()
+        # Legacy sandboxed self-modification executor (DEPRECATED — the
+        # canonical self-modification path is the SelfModificationGate inside
+        # CognitiveRuntime; this legacy executor is retained for acceptance
+        # tests and always runs through the security-wired sandbox).
         self.self_mod = ControlledSelfModificationEngine(sandbox=self.sandbox)
         self.benchmarks = BenchmarkRunner()
-        self.ascension = AscensionEngine(
-            plasticity_mgr=self.plasticity,
-            mod_engine=self.self_mod,
-            benchmark_runner=self.benchmarks
-        )
         self.scoreboard = DevelopmentalScoreboard()
         self.anti_gaming = AntiGamingDetector()
         self.ui_bridge = UIStateBridge()
@@ -291,10 +294,13 @@ class AscendantEngine:
             event_bus=self.event_bus,
         )
 
-        # 13. Cognitive OS & Autonomous Organism & Intelligence Foundry & Species Runtime
+        # 13. Cognitive OS & Autonomous Organism & Intelligence Foundry
+        # NOTE: the legacy CognitiveSpeciesRuntime (zerion/cognitive_species) is
+        # DEPRECATED and isolated — it is NOT constructed by the live runtime
+        # (its own GoalField/router were a competing source of truth). Tests
+        # that need it construct it directly.
         self.organism = CognitiveOrganism(data_dir=str(self.data_dir))
         self.foundry = IntelligenceFoundry(data_dir=str(self.data_dir))
-        self.species_runtime = CognitiveSpeciesRuntime(data_dir=str(self.data_dir))
         self.timeline = DevelopmentTimelineManager(db_path=str(self.data_dir / "timeline.db"))
         self.continuous_objectives = self.organism.objectives
 
@@ -307,6 +313,9 @@ class AscendantEngine:
             event_bus=self.event_bus,
             objectives=self.organism.objectives,
             models_dir=self.models_dir,
+            # The canonical security boundary gates self-modification approval
+            # (SYSTEM_MUTATE is never held by default -> denials are honest).
+            security=self.security,
         )
         # Slice 10: the visualization state adapter is the only channel between
         # the runtime and the UI; commands go through the validated CommandAPI.
@@ -329,6 +338,9 @@ class AscendantEngine:
         self._running = False
         self._cycle_count = 0
         self._cycle_history: List[GenesisCycleTrace] = []
+        # Slice 8: persistent pulse heartbeat (spawned in start(), cancelled in
+        # stop()). Keeps the CognitivePulse loop alive in UI/server/daemon mode.
+        self._pulse_driver_task: Optional[asyncio.Task] = None
 
     async def start(self):
         if self._running:
@@ -344,6 +356,11 @@ class AscendantEngine:
 
         # Slice 1: start the cognitive foundation
         await self.cognitive_runtime.start()
+
+        # Slice 8: drive the CognitivePulse on a persistent cadence while the
+        # engine runs (UI/server/daemon mode gets the full event-driven loop,
+        # not just the bounded per-cycle drain in run_developmental_cycle).
+        self._pulse_driver_task = asyncio.create_task(self._drive_pulse_loop())
 
         # Slice 10.1: start the always-available voice perception service
         # (independent of the UI; reports honest microphone state).
@@ -364,6 +381,15 @@ class AscendantEngine:
         if not self._running:
             return
         self._running = False
+        # Stop the pulse heartbeat before the runtime stops so no tick races
+        # the shutdown.
+        if self._pulse_driver_task is not None:
+            self._pulse_driver_task.cancel()
+            try:
+                await self._pulse_driver_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._pulse_driver_task = None
         await self.event_bus.publish(Event(
             event_type=EventType.SYSTEM_SHUTDOWN,
             payload={"timestamp": time.time()},
@@ -377,6 +403,26 @@ class AscendantEngine:
         await self.watchdog.stop()
         await self.scheduler.stop()
         self.identity.save()
+
+    async def _drive_pulse_loop(self) -> None:
+        """Persistent cadence driving the canonical CognitivePulse (Slice 8).
+
+        The pulse reacts to bus events and executes bounded, resource-aware
+        work; this heartbeat keeps the loop alive while the engine runs. A
+        failed tick never kills the heartbeat, and the cadence is tunable via
+        ZERION_PULSE_TICK_SECONDS (default 2.0s).
+        """
+        interval = max(0.1, float(os.environ.get("ZERION_PULSE_TICK_SECONDS", "2.0")))
+        while self._running:
+            try:
+                await asyncio.sleep(interval)
+                if not self._running:
+                    break
+                await self.cognitive_runtime.tick_pulse(budget=1)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                continue
 
     async def _on_prediction_error(self, event: Event):
         sig = PressureSignal(
@@ -424,6 +470,23 @@ class AscendantEngine:
         self.world_tracker.record_observation("host_mem", "available_mb", snap.memory_available_mb, source="resource_governor")
         perceptions_ingested += 1
         self.unknown_space.scan_for_blind_spots(self.world.list_nodes())
+        # Slice 1/8: real world observations are canonical runtime events — the
+        # attention field and the CognitivePulse consume them (observation ->
+        # attention review), so the flywheel drives the runtime loop, not a
+        # parallel copy of it.
+        await self.event_bus.publish(Event(
+            event_type=EventType.OBSERVATION_RECORDED,
+            payload={
+                "objective": "host resource observations",
+                "source": "flywheel",
+                "observations": {
+                    "host_cpu_load_percent": snap.cpu_percent,
+                    "host_mem_available_mb": snap.memory_available_mb,
+                },
+            },
+            source="flywheel",
+            priority=40,
+        ), dispatch_immediately=True)
 
         # 2. UPDATE SELF MODEL & CHECK OBJECTIVES
         active_objs = self.identity.list_objectives(active_only=True)
@@ -437,6 +500,24 @@ class AscendantEngine:
 
         # 4. DISCOVER PROBLEMS 3.0 & QUESTION GENESIS 3.0
         problems = self.problem_generator.generate_candidates(self.pressure_field)
+        # Slice 2/8: every genuinely detected problem is an ANOMALY_DETECTED
+        # event on the canonical bus — the runtime's QuestionGenesis path
+        # (anomaly -> question -> attention -> hypothesis) and the pulse consume
+        # it. Bounded to the top few so a pressure flood never overwhelms
+        # attention; only real pressure-derived problems are emitted.
+        for problem in problems[:3]:
+            await self.event_bus.publish(Event(
+                event_type=EventType.ANOMALY_DETECTED,
+                payload={
+                    "objective": problem.description,
+                    "description": problem.description,
+                    "source": getattr(problem, "source", "pressure_field"),
+                    "problem_id": getattr(problem, "id", f"problem_{cycle_id}"),
+                    "magnitude": 0.75,
+                },
+                source="flywheel",
+                priority=60,
+            ), dispatch_immediately=True)
         new_questions = []
         for p in problems[:2]:
             qs = self.question_genesis.generate_from_problem(p)
@@ -459,7 +540,10 @@ class AscendantEngine:
             )
             if synth_res.success and synth_res.strategy:
                 self.strategy_registry.register_strategy(synth_res.strategy)
-                self.strategy_evolution.record_lineage(synth_res.strategy.strategy_id, derivation_type="genesis", gain=0.08)
+                # Honest lineage: genesis gain is NOT measured at synthesis time,
+                # so it is recorded as 0.0 (unmeasured) — never a fabricated 0.08.
+                self.strategy_evolution.record_lineage(
+                    synth_res.strategy.strategy_id, derivation_type="genesis")
                 strategies = [synth_res.strategy]
                 strategies_born += 1
 
@@ -516,42 +600,94 @@ class AscendantEngine:
             supporting_evidence=["Cell execution graph verified"]
         )
 
-        evi = EvidenceItem(
-            source=f"cycle_{cycle_id}",
-            verification_method=VerificationMethod.FORMAL_PROOF if not attack_res.broken else VerificationMethod.HEURISTIC_CHECK,
-            data=prog_res,
-            confidence_weight=0.95 if not attack_res.broken else 0.40
+        cycle_success = bool(prog_res.get("completed")) and not attack_res.broken
+        # Slice 8: real runtime outcomes. A failed cycle is a TASK_FAILED event
+        # (attention candidate + pulse failure analysis) and a PREDICTION_ERROR
+        # (question genesis investigates why the flywheel's expectation missed).
+        if not cycle_success:
+            await self.event_bus.publish(Event(
+                event_type=EventType.TASK_FAILED,
+                payload={
+                    "objective": target_q.text,
+                    "task_id": cycle_id,
+                    "source": "flywheel",
+                    "error": str(attack_res.contradictions)[:256],
+                },
+                source="flywheel",
+                priority=55,
+            ), dispatch_immediately=True)
+            await self.event_bus.publish(Event(
+                event_type=EventType.PREDICTION_ERROR,
+                payload={
+                    "objective": target_q.text,
+                    "prediction_id": pre_pred.prediction_id,
+                    "magnitude": 0.8,
+                    "description": f"Flywheel cycle {cycle_id} failed verification",
+                    "source": "flywheel_calibration",
+                },
+                source="flywheel",
+                priority=65,
+            ), dispatch_immediately=True)
+
+        # 10b. REALITY EVIDENCE -> canonical Slice 3 EvidenceStore (one write
+        # path; the legacy zerion/evidence ledger is no longer written by the
+        # flywheel). The attack result is OBSERVED runtime evidence.
+        canonical_evidence = CognitiveEvidence(
+            content={"program_result": prog_res, "attack_broken": attack_res.broken},
+            provenance=Provenance(
+                source=f"flywheel:cycle_{cycle_id}",
+                observed_at=time.time(),
+                evidence_type="flywheel_program_verification",
+                content_reference=str(prog_res.get("final_data", ""))[:512],
+                reliability=0.95 if not attack_res.broken else 0.40,
+                mode=EvidenceMode.OBSERVED,
+                recorded_at=time.time(),
+            ),
+            verdict=EvidenceVerdict.SUPPORTS if not attack_res.broken else EvidenceVerdict.CONTRADICTS,
         )
-        evi_id = self.evidence.add_evidence(evi)
+        canonical_evidence_id = self.cognitive_runtime.evidence_store.put(canonical_evidence).evidence_id
 
         # 11. POST-EXECUTION CALIBRATION & EXPERIENCE DISTILLATION
         self.meta_prediction.record_post_execution_feedback(
             prediction_id=pre_pred.prediction_id,
             actual_strategy=selected_strategy.name,
-            actual_success=prog_res.get("completed", False) and not attack_res.broken,
+            actual_success=cycle_success,
             actual_latency_ms=prog_res.get("total_duration_ms", 10.0)
         )
         self.self_predictor.record_actual_outcome(
             prediction=self_pred,
             actual_strategy=selected_strategy.name,
-            actual_success=prog_res.get("completed", False) and not attack_res.broken,
+            actual_success=cycle_success,
             actual_latency_ms=prog_res.get("total_duration_ms", 10.0)
         )
-        self.entity_state.capture_snapshot(
-            objectives_count=len(active_objs),
-            strategies_count=len(self.strategy_registry.list_strategies()),
-            capabilities_count=len(self.self_model._capabilities),
-            episodes_count=len(self.memory._episodes)
-        )
 
-        self.memory.record_episode(Episode(
-            goal=target_q.text,
-            actions_taken=[s["cell_type"] for s in prog_res.get("execution_log", [])],
-            outcome_status="SUCCESS" if prog_res.get("completed") and not attack_res.broken else "FAILURE",
-            reward=0.95 if not attack_res.broken else 0.30,
-            duration_ms=prog_res.get("total_duration_ms", 10.0)
-        ))
-        self.memory.trigger_distillation()
+        # 11b. EPISODE -> canonical Slice 4 EpisodeStore (one write path; the
+        # legacy DevelopmentalMemoryStore is no longer written by the flywheel).
+        flywheel_episode = ExperienceEpisode(
+            context=target_q.text,
+            actions=[{"action": s.get("cell_type", "cell"), "at": time.time()}
+                     for s in prog_res.get("execution_log", [])],
+            outcomes=[{"outcome": "SUCCESS" if cycle_success else "FAILURE",
+                       "at": time.time(),
+                       "detail": {"reward": 0.95 if not attack_res.broken else 0.30,
+                                   "duration_ms": prog_res.get("total_duration_ms", 10.0),
+                                   "evidence_id": canonical_evidence_id}}],
+            success=cycle_success,
+            status=EpisodeStatus.COMPLETED,
+            mode=EpisodeMode.OBSERVED,
+            provenance={"source": f"flywheel:cycle_{cycle_id}", "flywheel": True},
+            capabilities_used=[selected_strategy.name],
+        )
+        self.cognitive_runtime.episode_store.put(flywheel_episode)
+        # One canonical write path: EPISODE_COMPLETED is consumed by the
+        # runtime's own handler, which distills and re-validates the episode
+        # (the legacy direct distill call was removed — see freeze rules).
+        await self.event_bus.publish(Event(
+            event_type=EventType.EPISODE_COMPLETED,
+            payload={"episode_id": flywheel_episode.episode_id},
+            source="flywheel",
+            priority=50,
+        ), dispatch_immediately=True)
 
         # 12. INTELLIGENCE FOUNDRY CYCLE & COGNITIVE AUTOPOIESIS
         foundry_res = await self.foundry.execute_foundry_cycle(
@@ -561,10 +697,15 @@ class AscendantEngine:
             uncertainty=0.60
         )
 
+        # Real measured learning acceleration feeds the organism's autopoietic
+        # reflection (reused below for maturity/telemetry) — the organism never
+        # falls back to a fabricated ratio like "2.57x".
+        acc_ratio = self.learning_to_learn.calculate_learning_acceleration()
         org_result = await self.organism.execute_organism_cycle(
             engine_context={
                 "resource_metrics": {"cpu_percent": snap.cpu_percent, "memory_mb": snap.memory_available_mb},
-                "pressure_signals": signals
+                "pressure_signals": signals,
+                "learning_acceleration": acc_ratio,
             }
         )
 
@@ -588,13 +729,12 @@ class AscendantEngine:
             confidence=0.95 if not attack_res.broken else 0.40
         ))
 
-        acc_ratio = self.learning_to_learn.calculate_learning_acceleration()
-
-        # 14. ASSESS MATURITY LEVEL
+        # 14. ASSESS MATURITY LEVEL (real measurements from the canonical
+        # episode/distilled stores — never the legacy in-memory dicts).
         maturity = self.maturity_evaluator.evaluate(
             has_native_caps=True,
-            episodes_count=len(self.memory._episodes),
-            procedural_rules_count=len(self.memory._procedural_rules),
+            episodes_count=self.cognitive_runtime.episode_store.count(),
+            procedural_rules_count=self.cognitive_runtime.distilled_store.count(),
             has_adaptive_phenotypes=True,
             has_pressure_field=True,
             brier_score=self.self_model.calibrator.calculate_brier_score(),
@@ -602,6 +742,18 @@ class AscendantEngine:
             synthesized_strategies_count=len(self.strategy_registry.list_strategies()),
             learning_acceleration=acc_ratio,
             flywheel_cycles=self._cycle_count
+        )
+
+        # 14b. Entity snapshot with REAL measured values only — bare counts and
+        # measured telemetry, never fabricated defaults (see blocker V9).
+        self.entity_state.capture_snapshot(
+            objectives_count=len(active_objs),
+            strategies_count=len(self.strategy_registry.list_strategies()),
+            capabilities_count=len(self.self_model._capabilities),
+            episodes_count=self.cognitive_runtime.episode_store.count(),
+            brier_score=self.self_model.calibrator.calculate_brier_score(),
+            learning_acceleration=acc_ratio,
+            maturity_level=maturity.current_level.value,
         )
 
         duration_ms = (time.perf_counter() - t0) * 1000.0
@@ -625,14 +777,12 @@ class AscendantEngine:
             duration_ms=round(duration_ms, 2)
         )
         self._cycle_history.append(trace)
-        return trace
 
-    async def run_species_pulse(self) -> SpeciesCycleTrace:
-        """Executes a resource-aware Cognitive Species pulse cycle."""
-        snap = self.resources.sample()
-        return await self.species_runtime.execute_pulse_cycle({
-            "resource_metrics": {"cpu_percent": snap.cpu_percent, "memory_mb": snap.memory_available_mb}
-        })
+        # Slice 8: drive the CognitivePulse so queued runtime work (goal review,
+        # attention review, question genesis, bottleneck scan) actually executes
+        # inside this cycle — bounded, so a busy queue never blocks the flywheel.
+        await self.cognitive_runtime.tick_pulse(budget=3)
+        return trace
 
     # Section 47: THE ULTIMATE DESIGN TEST RUNNER
     async def ask_ultimate_questions(self) -> Dict[str, Any]:
@@ -724,6 +874,98 @@ def profile_mobile_io_latency_and_throughput(payload):
         }
 
     # --- 7-Level Cognitive Hierarchy Query Engine ---
+    def local_readiness(self) -> Dict[str, Any]:
+        """ZERION LOCAL READINESS — real per-subsystem states, never
+        hard-coded. Each entry is measured from the actual runtime (mic
+        monitor, STT/TTS engine detection, GGUF discovery + backend probe,
+        pulse offline mode, UI adapter). No key is required.
+        """
+        import os as _os
+        out: Dict[str, Any] = {"mode": "LOCAL"}
+
+        # MICROPHONE
+        try:
+            vp = self.voice_perception
+            out["microphone"] = {
+                "status": vp.mic_status(),
+                "phase": vp.phase.value,
+                "monitor": vp.monitor.describe(),
+                "reason": vp._mic_reason or None,
+            }
+        except Exception as e:  # noqa: BLE001
+            out["microphone"] = {"status": "UNKNOWN",
+                                 "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+        # LOCAL STT
+        try:
+            out["stt"] = self.voice_env.detect_stt().to_dict()
+        except Exception as e:  # noqa: BLE001
+            out["stt"] = {"status": "UNKNOWN",
+                           "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+        # LOCAL TTS
+        try:
+            out["tts"] = self.voice_env.detect_tts().to_dict()
+        except Exception as e:  # noqa: BLE001
+            out["tts"] = {"status": "UNKNOWN",
+                           "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+        # LOCAL GGUF MODELS + inference backend
+        try:
+            from zerion.model_providers.gemini_provider import \
+                LocalGGUFProvider
+            probe = LocalGGUFProvider(models_dir=str(self.models_dir))
+            info = probe.backend_info()
+            disc = self.cognitive_runtime.local_models
+            discovered = disc.models() if hasattr(disc, "models") else {}
+            available = [m for m in discovered.values()
+                         if getattr(getattr(m, "status", None), "value", "") == "AVAILABLE"]
+            out["models"] = {
+                "dir": str(self.models_dir),
+                "discovered": len(discovered),
+                "available": len(available),
+                "selected": sorted(m.model_id for m in available)[:3],
+                "status": ("READY" if available else "NO_LOCAL_MODEL_AVAILABLE"),
+                "backend": {
+                    "python_backend": bool(info.get("python_backend")),
+                    "cli": info.get("cli"),
+                },
+            }
+        except Exception as e:  # noqa: BLE001
+            out["models"] = {"status": "UNKNOWN",
+                              "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+        # COGNITIVE RUNTIME
+        try:
+            pulse = self.cognitive_runtime.cognitive_pulse
+            out["runtime"] = {
+                "started": self._running,
+                "offline_mode": getattr(pulse, "_offline_mode", "UNKNOWN").value,
+                "state": getattr(self.cognitive_runtime.state, "runtime_status", "UNKNOWN"),
+            }
+        except Exception as e:  # noqa: BLE001
+            out["runtime"] = {"status": "UNKNOWN",
+                               "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+        # UI EVENT BRIDGE
+        out["ui"] = {"status": ("READY" if self.ui_adapter is not None
+                                  else "UNAVAILABLE")}
+
+        # NETWORK (informational; LOCAL cognition never requires it)
+        try:
+            out["network"] = self.voice_env.network.state()
+        except Exception:  # noqa: BLE001
+            out["network"] = {"state": "UNKNOWN"}
+
+        # API KEYS: informational only — never required for LOCAL cognition.
+        out["keys"] = {
+            "OPENAI_API_KEY": ("SET (optional)"
+                               if _os.environ.get("OPENAI_API_KEY") else "NOT_REQUIRED"),
+            "GEMINI_API_KEY": ("SET (optional)"
+                               if _os.environ.get("GEMINI_API_KEY") else "NOT_REQUIRED"),
+        }
+        return out
+
     def answer_hierarchy_level(self, level: int, context_goal: Optional[str] = None) -> Dict[str, Any]:
         """
         Executes mechanistic introspection across all 7 levels of the GENESIS hierarchy:

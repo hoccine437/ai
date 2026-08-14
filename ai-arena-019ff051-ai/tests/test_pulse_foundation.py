@@ -495,8 +495,10 @@ class TestOfflineFirst(unittest.IsolatedAsyncioTestCase):
         rt = _rt(self.tmp)
         await rt.start()
         pulse = rt.cognitive_pulse
-        self.assertEqual(pulse._offline_mode, OfflineMode.AUTO)
-        pulse._offline_mode = OfflineMode.OFFLINE_ONLY
+        # Local-first canonical default (OFFLINE_ONLY): normal cognition must
+        # never require cloud providers.
+        self.assertEqual(pulse._offline_mode, OfflineMode.OFFLINE_ONLY)
+        pulse._offline_mode = OfflineMode.AUTO
         self.assertTrue(pulse.health()["running"])
         await rt.stop()
 
@@ -1253,6 +1255,10 @@ class TestOfflineEnforcement(unittest.IsolatedAsyncioTestCase):
         rt = _rt(self.tmp)
         await rt.start()
         pulse = rt.cognitive_pulse
+        # This test exercises the BUDGET path specifically, so run in AUTO
+        # (the canonical default is OFFLINE_ONLY, which defers provider work
+        # for the offline reason before the budget is consulted).
+        pulse.set_offline_mode(OfflineMode.AUTO)
         pulse.config["budgets"] = {
             "cpu_units_per_hour": 100.0, "api_cost_per_day": 100.0,
             "network_requests_per_hour": 100, "concurrent_tasks": 2,

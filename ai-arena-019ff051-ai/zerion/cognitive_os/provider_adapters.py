@@ -181,11 +181,18 @@ class LegacyGGUFAdapter:
         resp = await self._legacy.generate_response(
             call.prompt, model_id=call.model_id)
         if resp.execution_mode.value == "REAL_MODEL_RESPONSE":
+            # Model identity (spec §39): every successful local inference is
+            # traceable to provider + model filename + backend + timestamp.
+            # Backend is read from the provider's real runtime state, never
+            # assumed.
+            backend = self._resolved_backend()
             return RawProviderResponse(
                 output=resp.content, latency_ms=resp.latency_ms,
                 usage={"prompt_tokens": resp.prompt_tokens,
                        "completion_tokens": resp.completion_tokens,
-                       "cost_cents": resp.cost_cents},
+                       "cost_cents": resp.cost_cents,
+                       "backend": backend,
+                       "timestamp": float(resp.timestamp or 0.0)},
                 success=True)
         # Legacy provider could not run local inference (no backend / empty
         # output). Structured failure — never the canned fallback text.
@@ -195,6 +202,16 @@ class LegacyGGUFAdapter:
             output=None, success=False,
             failure_kind=ProviderFailureKind.MODEL_LOAD_FAILURE,
             error=f"local_gguf: {reason}")
+
+    def _resolved_backend(self) -> str:
+        """Which GGUF runtime actually exists to run inference. Evidence-based
+        (import spec + PATH probe), never assumed from configuration."""
+        info = getattr(self._legacy, "backend_info", lambda: {})()
+        if info.get("python_backend"):
+            return "llama-cpp-python"
+        if info.get("cli"):
+            return f"llama.cpp CLI ({info['cli']})"
+        return "NONE"
 
     async def stream(self, call: ProviderCall) -> AsyncIterator[RawProviderResponse]:
         raise NotImplementedError("local gguf adapter: streaming not supported")

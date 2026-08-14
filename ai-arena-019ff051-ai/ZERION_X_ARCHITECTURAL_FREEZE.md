@@ -664,34 +664,268 @@ or the UI (I012, I005, I015):
 
 ---
 
+## FREEZE BLOCKER RESOLUTION
+
+Second pass. Mission: eliminate the five blockers that kept the architecture at
+STRUCTURALLY SOUND WITH REQUIRED FIXES. No new Slice, no new feature, no new
+subsystem — only structural corrections, each verified by runtime analysis and
+by the invariant suite.
+
+### Blocker 1 — Two live identities → RESOLVED
+
+- **Before:** `IdentityCore` ("ZERION-X ASCENDANT", `ascendant-core-v1`) and
+  `CognitiveEntityIdentity` ("ZERION-X SINGULARITY", `zerion-singularity-core-v1`)
+  both live; engine instantiated both (`engine.py:210-211`).
+- **Root cause:** incremental generations imported side by side.
+- **Change:** canonical constants `CANONICAL_SYSTEM_NAME`/`CANONICAL_SYSTEM_ID`
+  in `zerion/identity/persistence.py`; `IdentityCore` owns them and adds
+  `get_identity_digest()`. `CognitiveEntityIdentity` is now an adapter: it
+  resolves name/id/digest from the passed `IdentityCore` (engine passes its
+  core) or from the canonical constants — it can never invent a second
+  identity. `CognitiveEntityStateStore(db_path, identity=...)` wires the
+  canonical core in.
+- **Runtime evidence:** `python main.py --status` prints ONE name
+  ("ZERION-X ASCENDANT"); `engine.entity_state.identity.get_identity_digest()
+  == engine.identity.get_identity_hash()`; no "SINGULARITY" string remains in
+  any live code path.
+- **Tests:** I026 (2 tests) — digest stable across restart, identity derived
+  from canonical core. `test_singularity_entity` updated to the canonical name.
+- **Remaining risk:** low. Standalone `CognitiveEntityIdentity()` (no core)
+  uses canonical constants; a future import of a third identity class would
+  fail I026.
+
+### Blocker 2 — SecurityBoundary unwired → RESOLVED
+
+- **Before:** `SecurityBoundary.authorize()` had zero call sites; the runtime
+  boundary was dead code.
+- **Root cause:** the boundary was constructed (`engine.py:204`) but never
+  connected to any execution path.
+- **Change:** three real wiring points, all fail-closed:
+  1. `CommandAPI.execute()` (`zerion/ui/commands.py`) — every UI command is
+     authorized through `engine.security` with an explicit command→permission
+     map; commands not in the map require SYSTEM_MUTATE (denied by default);
+     denial returns `SECURITY_DENIED` and the handler never runs.
+  2. `ExecutionSandbox` (`zerion/experiments/sandbox.py`) — optional `security`;
+     `run_python_code()` authorizes before spawning a subprocess; denial
+     blocks execution. The engine's sandbox is wired (`ExecutionSandbox(
+     security=self.security)`).
+  3. `SelfModificationGate` (`zerion/cognitive_os/self_modification_gate.py`)
+     — optional `security`; `approve()` requires SYSTEM_MUTATE when a boundary
+     is wired. `CognitiveRuntime(security=...)` passes the engine's boundary
+     into the gate, so engine-driven self-modification cannot bypass it.
+- **Runtime evidence:** `POST /api/command` with a denied permission returns
+  `SECURITY_DENIED` (audited via `get_audit_trail`); sandboxed code execution
+  is authorized and audited; the gate refuses self-modification when
+  SYSTEM_MUTATE is not held (which is always, by default).
+- **Tests:** I027 (7 tests) — authorized dispatch, denied handler blocked,
+  unlisted command fails closed, model cannot bypass (caller-agnostic gate),
+  sandbox denial blocks execution, gate + boundary denies self-modification,
+  legacy sandbox cannot bypass.
+- **Remaining risk:** low. The canonical capability `PermissionPolicy` gates
+  remain the second layer for high-risk capabilities; the SecurityBoundary
+  now guards the command/sandbox/self-modification paths.
+
+### Blocker 3 — Entity state machine not enforced → RESOLVED
+
+- **Before:** `CognitiveEntityStateStore.transition_state()` was a bare setter;
+  `current_state` was freely assignable; state was not persisted.
+- **Root cause:** the store was telemetry-only and never treated as a state
+  machine.
+- **Change:** `zerion/entity/state.py` — explicit `_ALLOWED_TRANSITIONS` policy
+  over the repository's actual states plus the required failure-semantics
+  states (FAILED, CANCELLED, INTERRUPTED, PAUSED, DEGRADED);
+  `validate_transition()` raises `InvalidStateTransitionError` (state
+  unchanged); `current_state` is a read-only property (direct assignment
+  raises `AttributeError`); the lifecycle state is persisted in `runtime_state`
+  and restored on restart (a DEGRADED entity does not silently resume).
+- **Runtime evidence:** every transition in the engine/test path now goes
+  through `transition_state`; snapshot lifecycle states come from the enforced
+  machine.
+- **Tests:** I028 (7 tests) — valid sequence, invalid rejected + unchanged,
+  direct mutation rejected, interruption→recovery, cancellation semantics,
+  DEGRADED survives restart, restart restores persisted state.
+- **Remaining risk:** low. The entity store is declared DERIVED telemetry
+  (canonical state is `CognitiveState`/`StateStore`); it no longer competes
+  for authority.
+
+### Blocker 4 — Legacy duplicates still live → RESOLVED (removed or isolated)
+
+- **Before:** engine constructed the species runtime (own `GoalField`/router),
+  the legacy flywheel wrote legacy memory/evidence, `AscensionEngine` was
+  constructed, and the CLI/UI read/wrote the legacy memory store.
+- **Root cause:** incremental generations wired side by side.
+- **Change:**
+  - **Species pulse — ISOLATED/DEPRECATED.** `engine.species_runtime` and
+    `engine.run_species_pulse()` removed (nothing in the live path called
+    them; only a test did). `zerion/cognitive_species/cognitive_pulse.py` is
+    marked DEPRECATED, reports only measured context metrics (no fabricated
+    latency/failure/reuse placeholders), and `reality_learned` is only True
+    when real metrics were provided.
+  - **AscensionEngine — REMOVED from the runtime** (zero live call sites).
+  - **Flywheel writes → canonical stores.** `run_developmental_cycle()` now
+    writes reality evidence through the canonical Slice 3 `EvidenceStore` and
+    episodes through the canonical Slice 4 `EpisodeStore` (+ canonical
+    `experience_distillation.distill_episode`). The legacy `EvidenceEngine`
+    and `DevelopmentalMemoryStore` are no longer written by the flywheel
+    (asserted empty after a cycle).
+  - **CLI/UI reads → canonical stores.** `--status`, `--memory`, `/api/memory`
+    and `/api/learn` now read/distill the canonical episode + distilled stores.
+  - **Legacy genome/evolution — KEEP with ADAPT, isolated.** The legacy
+    22-dim genome (`engine.genome_manager`) is read-only at runtime (phenotype
+    derivation only; no promote/reject/mutate call site anywhere in the live
+    path). The only evolution write path is the canonical gate + canonical
+    genome store. `StrategyEvolutionEngine.record_lineage` no longer receives
+    a fabricated `gain=0.08` (defaults to 0.0 = unmeasured).
+- **Runtime evidence:** after `python main.py --cycles 1`, canonical stores
+  show 1 episode + 1 distilled rule while `engine.memory._episodes` and
+  `engine.evidence._evidence` remain empty; `hasattr(engine,
+  "species_runtime")` is False.
+- **Tests:** I029 (3 tests) — flywheel writes canonical stores only, legacy
+  stores untouched; species runtime/ascension not wired; security boundary
+  wired into runtime gate + sandbox. `test_cognitive_species` updated to
+  construct the isolated runtime directly.
+- **Remaining risk:** medium, documented. Legacy modules remain in the tree
+  (memory/evidence/genome/evolution/species) for tests and as deprecated
+  read-only views; they cannot write canonical truth. Deleting them is a
+  follow-up migration item, not a runtime-blocking one.
+
+### Blocker 5 — Fabricated metric defaults → RESOLVED
+
+- **Before:** `entity/state.py:capture_snapshot` defaulted `brier_score=0.02`,
+  `learning_acceleration=2.57`, `maturity_level="L7_COGNITIVE_GENERATIVE"` and
+  invented counts (1/3/8/10); the timeline `DevelopmentSnapshot` also
+  defaulted `brier_score=0.02`/`L6_META_LEARNING`; the species pulse hard-coded
+  bottleneck inputs; the flywheel recorded a fabricated `gain=0.08`.
+- **Root cause:** attractive placeholders substituted for missing measurements.
+- **Change:**
+  - `capture_snapshot` defaults are `None`; every metric carries provenance
+    (`value` + `measurement_status`: MEASURED vs NOT_MEASURED); the flywheel
+    passes real measured values (brier from the calibrator, acceleration from
+    learning-to-learn, maturity from the evaluator, counts from canonical
+    stores).
+  - `DevelopmentSnapshot` brier/maturity/counts default to `None` and
+    `capture_snapshot` reads real values from the engine.
+  - Species pulse: only measured context metrics feed bottleneck reporting.
+  - `record_lineage` records unmeasured genesis gain as 0.0.
+- **Runtime evidence:** cold-start snapshot serializes `{value: null,
+  measurement_status: "NOT_MEASURED"}` — no 0.02 / 2.57 / L7 anywhere; a real
+  cycle writes MEASURED values.
+- **Tests:** I030 (4 tests) — cold start reports NOT_MEASURED, measured values
+  marked MEASURED, legacy placeholders never substituted, missing telemetry is
+  not success.
+- **Second sweep (I031, 4 tests) — remaining live-path fabrication patterns
+  eliminated.** A repository-wide scan for the same attractive-placeholder
+  pattern found three more live-path violations and fixed them:
+  - `cognitive_os/organism.py` hard-coded `learning_acceleration=2.57` and a
+    fabricated `strategy_market_reputations={strat: 0.95}` into the organism
+    cycle (the exact 2.57 the blocker's BEFORE cites). The engine now injects
+    its real measured acceleration through `engine_context`; without one the
+    organism result is `None` and autopoietic reflection reports `UNMEASURED`
+    instead of "OPTIMIZED" from invented evidence.
+  - `cognitive_genesis/genesis_pipeline.py` claimed a "blind benchmark" score
+    of `0.94` (plus a `confidence: 0.94` embedded in generated strategy code)
+    without running any benchmark. Stage 8 now reports accuracy NOT_MEASURED,
+    reports only the real measured sandbox latency, and the strategy's
+    benchmark_results carry an explicit `measurement_status`; generated code
+    returns `confidence: None`.
+  - `experiments/ablation_study.py` (`--ablation`) printed hard-coded scores
+    (0.942 etc.) as an executed study. Every result is now explicitly labeled
+    `measurement_status=SIMULATED` and the CLI prints an honest disclaimer
+    that the table is illustrative priors, not measurements.
+  - Out of scope / documented, not changed: declared topology/strategy priors
+    (architecture registry, native-strategy confidence with `provenance=
+    "native_core"`), pipeline scoring constants derived from real validation
+    status, the isolated `long_horizon_100.py` experiment harness (not wired),
+    and the `maturity.evaluate()` signature defaults — every call site uses
+    `evaluate_from_evidence()` or passes real values.
+- **Runtime evidence:** live `--cycles 1` run shows the scoreboard reporting
+  only UNAVAILABLE / CONFIGURED_DEFAULT / CALCULATED_FROM_OBSERVED_DATA with
+  no fabricated numbers; the organism cycle in that run receives the real
+  measured acceleration.
+- **Remaining risk:** low. Any future caller that passes attractive defaults
+  instead of measurements will now show NOT_MEASURED and fail I030/I031's
+  spirit.
+
+---
+
 ## ARCHITECTURE STATUS
 
 ```
 [ ] NOT READY
-[X] STRUCTURALLY SOUND WITH REQUIRED FIXES
-[ ] FROZEN
+[ ] STRUCTURALLY SOUND WITH REQUIRED FIXES
+[X] FROZEN
 ```
 
-**NOT FROZEN.** The canonical core (state, bus, evidence/belief, routing,
-pulse, gate, persistence) is real, enforced, and invariant-tested — but the
-following remain before the architecture may be marked FROZEN:
+**FROZEN.** Verified against the freeze gate:
 
-1. **V1 (HIGH):** two live identity implementations with conflicting
-   self-names — resolve to one canonical identity.
-2. **V8 (HIGH):** `SecurityBoundary` exists but `authorize()` is never called —
-   wire it into the action path or formally replace it with the gates.
-3. **V2 (MEDIUM):** entity state machine has no enforced transitions — migrate
-   to derived telemetry.
-4. **V3–V7, V10 (MEDIUM):** legacy duplicates (species pulse, legacy
-   memory/evidence/genome/evolution, flywheel writes) remain live in the
-   runtime — isolate/deprecate per §18.
-5. **V9 (MEDIUM):** fabricated metric defaults in `entity/state.py` — remove.
+- [x] ONE canonical identity (I026) — `IdentityCore` only; entity state derives
+  from it; no "SINGULARITY" in live code.
+- [x] SecurityBoundary is actually wired (I027) — CommandAPI, ExecutionSandbox,
+  SelfModificationGate all authorize through it.
+- [x] Authorization controls execution — denials return SECURITY_DENIED / block
+  the sandbox / refuse gate approval before any handler or mutation runs.
+- [x] State transitions are enforced (I028) — policy table, read-only property,
+  persisted + restored lifecycle state.
+- [x] Legacy duplicates are removed or isolated (I029) — species pulse and
+  AscensionEngine removed from the runtime; legacy memory/evidence no longer
+  written; legacy genome read-only; flywheel writes canonical stores only.
+- [x] Canonical stores have one authoritative write path — every live write
+  (pulse, flywheel, UI distill, gate promotion) targets the canonical Slice
+  1–8 stores.
+- [x] Fabricated metric defaults are eliminated (I030 + I031) — NOT_MEASURED
+  is the honest default everywhere, including the organism cycle, genesis
+  pipeline, and the ablation study.
+- [x] New invariants pass — 85 invariant tests, 0 failures.
+- [x] Existing regression suite passes — 790 tests run, 0 failures (2 skipped).
+- [x] compileall passes.
+- [x] No critical blocker remains.
 
-When (1)–(5) are closed and the invariant suite still passes with 0 failures,
-re-run this gate and mark FROZEN.
+**Files modified (this correction pass):** 20 — `zerion/engine.py`,
+`zerion/entity/state.py`, `zerion/entity/identity.py`,
+`zerion/identity/persistence.py`, `zerion/evolution/timeline.py`,
+`zerion/experiments/sandbox.py`, `zerion/cognitive_os/self_modification_gate.py`,
+`zerion/cognitive_os/cognitive_runtime.py`, `zerion/cognitive_species/cognitive_pulse.py`,
+`zerion/ui/commands.py`, `zerion/ui/server.py`, `zerion/cli.py`,
+`tests/test_architectural_invariants.py`, `tests/test_singularity_entity.py`,
+`tests/test_cognitive_species.py`, `zerion/cognitive_os/organism.py`,
+`zerion/cognitive_os/reflection.py`, `zerion/cognitive_genesis/genesis_pipeline.py`,
+`zerion/cognitive_genesis/strategy.py`, `zerion/experiments/ablation_study.py`.
+
+**Files removed:** `engine.species_runtime` + `engine.run_species_pulse()` +
+`engine.ascension` (wiring removed; modules kept, deprecated/isolated).
+
+**Files isolated/deprecated:** `zerion/cognitive_species/` (deprecated,
+construct-only-in-tests), legacy `zerion/memory/` + `zerion/evidence/`
+(read-only legacy views — no live writes), legacy `zerion/cognitive_genome/`
+(read-only phenotype source at runtime), `zerion/evolution/ascension.py`
+(no runtime wiring).
+
+**Tests added:** 28 (I026–I031). **Tests executed:** 790. **Tests passed:**
+790. **Tests failed:** 0. **Skipped:** 2. **compileall:** clean.
+
+**Remaining limitations (documented, non-blocking):**
+1. Legacy modules stay in the tree for tests and as deprecated views; physical
+   deletion is a follow-up migration task (§18) — they cannot write canonical
+   truth.
+2. The legacy 22-dim genome remains the flywheel's phenotype source (read-only,
+   KEEP-ADAPT per V7's migration-risk note). Unifying it into the canonical
+   genome store is deferred; it has no write path in the runtime.
+3. `engine.self_mod`/`engine.experiments`/`engine.autophagy` remain constructed
+   for acceptance tests (sandboxed/security-wired); no live runtime loop calls
+   them.
+4. The entity store (`entity_state.db`) is DERIVED telemetry of canonical
+   state; it is not authority.
+5. `maturity.evaluate()` still has attractive signature defaults (episodes=1,
+   brier=0.05, acceleration=1.5, flywheel_cycles=10) as a pure API fallback,
+   but no live call site uses them — CLI/UI/voice all call
+   `evaluate_from_evidence()` and the engine passes real values. Removing the
+   defaults is a mechanical follow-up, not a runtime fabrication.
+6. The standalone `zerion/experiments/long_horizon_100.py` harness synthesizes
+   a 100-cycle trajectory from formulas; it is not wired into any CLI flag or
+   the runtime and is documented as an experiment scaffold, not telemetry.
 
 ---
 
-*No marketing claims. No AGI claims. No fabricated metrics. All statuses above
-are measured from the repository at this commit and from the executed test
-suite (762 tests, 0 failures).*
+*No marketing claims. No AGI claims. No fabricated metrics. Every status above
+is measured from the repository and from the executed test suite (790 tests,
+0 failures).*

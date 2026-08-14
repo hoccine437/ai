@@ -33,11 +33,18 @@ Repository-discovered additions:
   I023  IDENTITY_IS_IMMUTABLE_ACROSS_RESTART
   I024  PROPOSAL_LIFECYCLE_TRANSITIONS_ARE_ENFORCED
   I025  VOICE_STATE_MACHINE_ENFORCES_TRANSITIONS
+Freeze-blocker elimination additions:
+  I026  ONE_CANONICAL_ZERION_IDENTITY (blocker 1)
+  I027  SECURITY_BOUNDARY_WIRED_AND_CONTROLS_EXECUTION (blocker 2)
+  I028  ENTITY_STATE_TRANSITIONS_ARE_ENFORCED (blocker 3)
+  I029  FLYWHEEL_WRITES_CANONICAL_STORES_ONLY (blocker 4)
+  I030  FABRICATED_METRIC_DEFAULTS_ARE_ELIMINATED (blocker 5)
 """
 
 import asyncio
 import json
 import os
+import shutil
 import sqlite3
 import tempfile
 import time
@@ -999,6 +1006,587 @@ class TestI025VoiceStateMachineEnforcesTransitions(unittest.TestCase):
         sm.transition(VoiceState.THINKING, reason="routing")
         sm.transition(VoiceState.SPEAKING, reason="utterance")
         self.assertEqual(sm.state, VoiceState.SPEAKING)
+
+# ---------------------------------------------------------------------------
+# I026 — ONE canonical Zerion identity (freeze blocker 1)
+# ---------------------------------------------------------------------------
+
+
+class TestI026OneCanonicalZerionIdentity(unittest.TestCase):
+    def test_engine_entity_identity_derives_from_canonical_core(self):
+        from zerion.engine import AscendantEngine
+        tmp = tempfile.mkdtemp(prefix="inv_identity_")
+        try:
+            engine = AscendantEngine(data_dir=tmp)
+            core = engine.identity
+            entity = engine.entity_state.identity
+            self.assertEqual(core.system_name, "ZERION-X ASCENDANT")
+            self.assertEqual(entity.entity_name, core.system_name)
+            self.assertEqual(entity.entity_id, core.system_id)
+            self.assertEqual(entity.get_identity_digest(), core.get_identity_hash())
+            # The legacy "SINGULARITY" identity must not exist anywhere live.
+            self.assertNotIn("SINGULARITY", entity.entity_name)
+            self.assertNotIn("singularity", entity.entity_id)
+            self.assertGreater(len(entity.commitments), 0)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_identity_digest_stable_across_restart(self):
+        from zerion.entity.state import CognitiveEntityStateStore
+        from zerion.identity.persistence import IdentityCore
+        tmp = tempfile.mkdtemp(prefix="inv_identity2_")
+        try:
+            db = os.path.join(tmp, "entity.db")
+            core1 = IdentityCore(storage_path=os.path.join(tmp, "id.json"))
+            store1 = CognitiveEntityStateStore(db_path=db, identity=core1)
+            d1 = store1.identity.get_identity_digest()
+            # Cold restart with a fresh core + fresh store on the same db.
+            core2 = IdentityCore(storage_path=os.path.join(tmp, "id.json"))
+            store2 = CognitiveEntityStateStore(db_path=db, identity=core2)
+            self.assertEqual(store2.identity.get_identity_digest(), d1)
+            self.assertEqual(store2.identity.entity_name, "ZERION-X ASCENDANT")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# I027 — SecurityBoundary is wired and controls execution (freeze blocker 2)
+# ---------------------------------------------------------------------------
+
+
+class _FakeVoiceState:
+    value = "LISTENING"
+
+
+class _FakeVoiceMachine:
+    state = _FakeVoiceState()
+
+
+class _FakeVoicePipeline:
+    def __init__(self):
+        self.state_machine = _FakeVoiceMachine()
+
+    async def stop_listening(self):
+        return None
+
+
+class _GrantingEngineStub:
+    def __init__(self):
+        self.security = SecurityBoundary()
+        self.voice_pipeline = _FakeVoicePipeline()
+
+
+class _LockedBoundary(SecurityBoundary):
+    """Test double: a boundary that holds only read/execute, never workspace
+    write or system mutate — exercises the real authorize() decision logic."""
+
+    def __init__(self):
+        super().__init__()
+        self._granted_permissions = {
+            PermissionLevel.READ_ONLY,
+            PermissionLevel.INTERNAL_EXECUTE,
+        }
+
+
+class _NoExecuteBoundary(SecurityBoundary):
+    """Test double: holds only READ_ONLY — even internal code execution is
+    denied, proving the sandbox gate controls execution."""
+
+    def __init__(self):
+        super().__init__()
+        self._granted_permissions = {PermissionLevel.READ_ONLY}
+
+
+class TestI027SecurityBoundaryWiredIntoExecution(unittest.TestCase):
+    def test_authorized_command_dispatches(self):
+        from zerion.ui.commands import CommandAPI
+        api = CommandAPI(engine=_GrantingEngineStub())
+        result = _run(api.execute("STOP_LISTENING"))
+        self.assertEqual(result["status"], "OK")
+
+    def test_denied_command_blocks_handler(self):
+        from zerion.ui.commands import CommandAPI
+        engine = _GrantingEngineStub()
+        engine.security = _LockedBoundary()
+        api = CommandAPI(engine=engine)
+        # SELECT_MODEL requires WORKSPACE_WRITE, which the locked boundary
+        # does not hold -> denied BEFORE the handler can run.
+        result = _run(api.execute("SELECT_MODEL", {"provider": "x", "model": "y"}))
+        self.assertEqual(result["status"], "SECURITY_DENIED")
+
+    def test_unlisted_command_fails_closed(self):
+        from zerion.ui.commands import CommandAPI
+        api = CommandAPI(engine=_GrantingEngineStub())
+        called = {"ran": False}
+
+        async def _cmd_probe(self, payload):
+            called["ran"] = True
+            return {"probe": True}
+
+        api._cmd_probe = _cmd_probe.__get__(api)
+        result = _run(api.execute("PROBE"))
+        self.assertEqual(result["status"], "SECURITY_DENIED")
+        self.assertFalse(called["ran"])  # handler never invoked
+
+    def test_model_cannot_bypass_command_authorization(self):
+        from zerion.ui.commands import CommandAPI
+        # The gate is caller-agnostic: a denied command is denied no matter who
+        # issues it (model, tool, plugin or user).
+        engine = _GrantingEngineStub()
+        engine.security = _LockedBoundary()
+        api = CommandAPI(engine=engine)
+        result = _run(api.execute("RUN_TASK", {"prompt": "do something"}))
+        self.assertEqual(result["status"], "SECURITY_DENIED")
+
+    def test_sandbox_denial_blocks_execution(self):
+        from zerion.experiments.sandbox import ExecutionSandbox
+        locked = ExecutionSandbox(security=_NoExecuteBoundary())
+        res = _run(locked.run_python_code("print('hi')"))
+        self.assertFalse(res.success)
+        self.assertIn("denied by security boundary", res.stderr)
+        # Granting boundary actually executes.
+        open_box = ExecutionSandbox(security=SecurityBoundary())
+        ok = _run(open_box.run_python_code("print('hi')"))
+        self.assertTrue(ok.success)
+
+    def test_self_modification_gate_requires_authorization(self):
+        from zerion.cognitive_os.improvement import ImprovementProposal, ModificationType
+        from zerion.cognitive_os.self_modification_gate import GatePolicy, SelfModificationGate
+        proposal = ImprovementProposal(
+            target_component="router",
+            modification_type=ModificationType.CONFIGURATION_CHANGE,
+            proposed_change={"routing_policy": {"policy_version": 7}},
+            rollback_plan="restore previous snapshot",
+            scope=["router"],
+        )
+        proposal.analysis = {"passed": True, "tests_passed": True, "risk": "LOW"}
+        proposal.test_results = [{"name": "t", "passed": True}]
+        proposal.benchmark = {"verdict": "SUPPORTED",
+                              "baseline": {"success_rate": 0.4},
+                              "candidate": {"success_rate": 0.8}}
+        # Without a security boundary the gate can approve (policy allows LOW).
+        open_gate = SelfModificationGate(policy=GatePolicy(allow_low_auto=True))
+        ok, _ = open_gate.approve(proposal)
+        self.assertTrue(ok)
+        # With the canonical boundary wired, SYSTEM_MUTATE is not held -> denied.
+        gated = SelfModificationGate(policy=GatePolicy(allow_low_auto=True),
+                                     security=SecurityBoundary())
+        ok2, reason = gated.approve(proposal)
+        self.assertFalse(ok2)
+        self.assertIn("security boundary", reason)
+
+    def test_legacy_sandbox_cannot_bypass_authorization(self):
+        from zerion.experiments.sandbox import ExecutionSandbox
+        # The legacy engine sandbox is the same class — with a boundary wired
+        # it cannot execute without authorization.
+        locked = ExecutionSandbox(security=_NoExecuteBoundary())
+        res = _run(locked.run_python_code("import os; os.system('true')"))
+        self.assertFalse(res.success)
+        self.assertIn("denied", res.stderr)
+
+
+# ---------------------------------------------------------------------------
+# I028 — entity state machine transitions are enforced (freeze blocker 3)
+# ---------------------------------------------------------------------------
+
+
+class TestI028EntityStateTransitionsEnforced(unittest.TestCase):
+    def _store(self, tmp):
+        from zerion.entity.state import CognitiveEntityStateStore
+        return CognitiveEntityStateStore(db_path=os.path.join(tmp, "entity.db"))
+
+    def test_valid_transition_sequence(self):
+        from zerion.entity.state import EntityLifecycleState as S
+        tmp = tempfile.mkdtemp(prefix="inv_entity_")
+        try:
+            store = self._store(tmp)
+            for state in (S.BOOTING, S.PERCEIVING, S.DELIBERATING, S.ACTING,
+                          S.EVOLVING, S.CONSOLIDATING, S.STANDBY):
+                store.transition_state(state)
+            self.assertEqual(store.current_state, S.STANDBY)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_invalid_transition_rejected_and_state_unchanged(self):
+        from zerion.entity.state import EntityLifecycleState as S, InvalidStateTransitionError
+        tmp = tempfile.mkdtemp(prefix="inv_entity2_")
+        try:
+            store = self._store(tmp)
+            with self.assertRaises(InvalidStateTransitionError):
+                store.transition_state(S.PERCEIVING)  # STANDBY -> PERCEIVING illegal
+            self.assertEqual(store.current_state, S.STANDBY)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_direct_mutation_attempt_rejected(self):
+        from zerion.entity.state import EntityLifecycleState as S
+        tmp = tempfile.mkdtemp(prefix="inv_entity3_")
+        try:
+            store = self._store(tmp)
+            with self.assertRaises(AttributeError):
+                store.current_state = S.ACTING
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_interruption_and_recovery(self):
+        from zerion.entity.state import EntityLifecycleState as S
+        tmp = tempfile.mkdtemp(prefix="inv_entity4_")
+        try:
+            store = self._store(tmp)
+            store.transition_state(S.BOOTING)
+            store.transition_state(S.PERCEIVING)
+            store.transition_state(S.INTERRUPTED)
+            store.transition_state(S.RECOVERING)
+            store.transition_state(S.ACTING)
+            self.assertEqual(store.current_state, S.ACTING)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_cancellation_is_distinct_and_terminal(self):
+        from zerion.entity.state import EntityLifecycleState as S, InvalidStateTransitionError
+        tmp = tempfile.mkdtemp(prefix="inv_entity5_")
+        try:
+            store = self._store(tmp)
+            store.transition_state(S.BOOTING)
+            store.transition_state(S.PERCEIVING)
+            store.transition_state(S.CANCELLED)
+            # CANCELLED cannot jump back to an active state, only restart.
+            with self.assertRaises(InvalidStateTransitionError):
+                store.transition_state(S.ACTING)
+            store.transition_state(S.STANDBY)
+            store.transition_state(S.BOOTING)
+            self.assertEqual(store.current_state, S.BOOTING)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_degraded_state_survives_restart(self):
+        from zerion.entity.state import EntityLifecycleState as S
+        tmp = tempfile.mkdtemp(prefix="inv_entity6_")
+        try:
+            store = self._store(tmp)
+            store.transition_state(S.BOOTING)
+            store.transition_state(S.DEGRADED)
+            # Restart from persisted state must NOT silently resume healthy.
+            store2 = self._store(tmp)
+            self.assertEqual(store2.current_state, S.DEGRADED)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_restart_restores_persisted_state(self):
+        from zerion.entity.state import EntityLifecycleState as S
+        tmp = tempfile.mkdtemp(prefix="inv_entity7_")
+        try:
+            store = self._store(tmp)
+            store.transition_state(S.BOOTING)
+            store.transition_state(S.PERCEIVING)
+            store2 = self._store(tmp)
+            self.assertEqual(store2.current_state, S.PERCEIVING)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# I029 — flywheel writes canonical stores only (freeze blocker 4)
+# ---------------------------------------------------------------------------
+
+
+class TestI029FlywheelWritesCanonicalStores(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="inv_flywheel_")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    async def test_flywheel_writes_canonical_episodes_and_evidence(self):
+        from zerion.engine import AscendantEngine
+        engine = AscendantEngine(data_dir=self.temp_dir)
+        await engine.start()
+        try:
+            ep_before = engine.cognitive_runtime.episode_store.count()
+            ev_before = engine.cognitive_runtime.evidence_store.count()
+            trace = await engine.run_developmental_cycle()
+            self.assertIsNotNone(trace.cycle_id)
+            self.assertGreater(engine.cognitive_runtime.episode_store.count(), ep_before)
+            self.assertGreater(engine.cognitive_runtime.evidence_store.count(), ev_before)
+            # Legacy stores must NOT be written by the live flywheel.
+            self.assertEqual(len(engine.memory._episodes), 0)
+            self.assertEqual(len(engine.evidence._evidence), 0)
+        finally:
+            await engine.stop()
+
+    def test_legacy_species_runtime_and_ascension_not_wired(self):
+        from zerion.engine import AscendantEngine
+        engine = AscendantEngine(data_dir=self.temp_dir)
+        self.assertFalse(hasattr(engine, "species_runtime"))
+        self.assertFalse(hasattr(engine, "run_species_pulse"))
+        self.assertFalse(hasattr(engine, "ascension"))
+        # The canonical pulse is the only orchestrator in the runtime.
+        self.assertTrue(hasattr(engine.cognitive_runtime, "cognitive_pulse"))
+
+    def test_engine_wires_canonical_security_boundary(self):
+        from zerion.engine import AscendantEngine
+        engine = AscendantEngine(data_dir=self.temp_dir)
+        self.assertIs(engine.cognitive_runtime.self_modification_gate.security,
+                      engine.security)
+        self.assertIs(engine.sandbox.security, engine.security)
+
+
+# ---------------------------------------------------------------------------
+# I030 — fabricated metric defaults are eliminated (freeze blocker 5)
+# ---------------------------------------------------------------------------
+
+
+class TestI030NoFabricatedMetricDefaults(unittest.TestCase):
+    def test_cold_start_entity_snapshot_reports_not_measured(self):
+        from zerion.entity.state import CognitiveEntityStateStore
+        tmp = tempfile.mkdtemp(prefix="inv_metrics_")
+        try:
+            store = CognitiveEntityStateStore(db_path=os.path.join(tmp, "entity.db"))
+            snap = store.capture_snapshot()  # no measurements available
+            self.assertIsNone(snap.brier_score)
+            self.assertIsNone(snap.learning_acceleration)
+            self.assertIsNone(snap.maturity_level)
+            self.assertIsNone(snap.active_objectives_count)
+            self.assertIsNone(snap.active_strategies_count)
+            self.assertIsNone(snap.active_capabilities_count)
+            self.assertIsNone(snap.memory_episodes_count)
+            d = snap.to_dict()
+            self.assertEqual(d["brier_score"]["measurement_status"], "NOT_MEASURED")
+            self.assertEqual(d["maturity_level"]["measurement_status"], "NOT_MEASURED")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_measured_values_are_marked_measured(self):
+        from zerion.entity.state import CognitiveEntityStateStore
+        tmp = tempfile.mkdtemp(prefix="inv_metrics2_")
+        try:
+            store = CognitiveEntityStateStore(db_path=os.path.join(tmp, "entity.db"))
+            snap = store.capture_snapshot(objectives_count=2, brier_score=0.41,
+                                          learning_acceleration=1.2,
+                                          maturity_level="L3_EMPIRICAL")
+            d = snap.to_dict()
+            self.assertEqual(d["brier_score"]["measurement_status"], "MEASURED")
+            self.assertEqual(d["brier_score"]["value"], 0.41)
+            self.assertEqual(d["active_objectives_count"]["value"], 2)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_legacy_placeholders_never_substituted(self):
+        from zerion.entity.state import CognitiveEntityStateStore
+        from zerion.evolution.timeline import DevelopmentSnapshot
+        tmp = tempfile.mkdtemp(prefix="inv_metrics3_")
+        try:
+            store = CognitiveEntityStateStore(db_path=os.path.join(tmp, "entity.db"))
+            snap = store.capture_snapshot()
+            for blob in (json.dumps(snap.to_dict()), json.dumps(DevelopmentSnapshot().to_dict())):
+                self.assertNotIn("0.02", blob)
+                self.assertNotIn("2.57", blob)
+                self.assertNotIn("L7_COGNITIVE_GENERATIVE", blob)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_missing_telemetry_is_not_success(self):
+        from zerion.entity.state import CognitiveEntityStateStore
+        tmp = tempfile.mkdtemp(prefix="inv_metrics4_")
+        try:
+            store = CognitiveEntityStateStore(db_path=os.path.join(tmp, "entity.db"))
+            snap = store.capture_snapshot()
+            # None is not a score — unknown is never converted into 0.0/1.0.
+            self.assertIsNone(snap.brier_score)
+            self.assertIsNone(snap.learning_acceleration)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# I031 — Remaining live-path fabrication patterns eliminated (freeze blocker 5
+# sweep): organism cycle acceleration, genesis pipeline benchmark score, and
+# the ablation study reference table.
+# ---------------------------------------------------------------------------
+
+
+class TestI031RemainingFabricationPatternsEliminated(unittest.IsolatedAsyncioTestCase):
+    async def test_organism_cycle_reports_unmeasured_acceleration_when_none_given(self):
+        from zerion.cognitive_os.organism import CognitiveOrganism
+        tmp = tempfile.mkdtemp(prefix="inv_org_metrics_")
+        try:
+            organism = CognitiveOrganism(data_dir=tmp)
+            res = await organism.execute_organism_cycle({
+                "resource_metrics": {"cpu_percent": 20.0, "memory_mb": 1024.0},
+                "pressure_signals": []
+            })
+            # No measurement supplied -> the result must NOT invent a 2.57x.
+            self.assertIsNone(res.learning_acceleration)
+            self.assertIsNotNone(organism.reflection_engine._reflection_history)
+            record = organism.reflection_engine._reflection_history[-1]
+            self.assertEqual(record["status"], "UNMEASURED")
+            self.assertIsNone(record["acceleration_ratio"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    async def test_organism_cycle_uses_supplied_measured_acceleration(self):
+        from zerion.cognitive_os.organism import CognitiveOrganism
+        tmp = tempfile.mkdtemp(prefix="inv_org_metrics2_")
+        try:
+            organism = CognitiveOrganism(data_dir=tmp)
+            res = await organism.execute_organism_cycle({
+                "resource_metrics": {"cpu_percent": 20.0, "memory_mb": 1024.0},
+                "pressure_signals": [],
+                "learning_acceleration": 1.35,
+            })
+            # A real measured value flows through verbatim.
+            self.assertEqual(res.learning_acceleration, 1.35)
+            record = organism.reflection_engine._reflection_history[-1]
+            self.assertEqual(record["acceleration_ratio"], 1.35)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    async def test_genesis_pipeline_does_not_fabricate_benchmark_score(self):
+        from zerion.cognitive_genesis.genesis_pipeline import CognitiveGenesisPipeline
+        pipeline = CognitiveGenesisPipeline()
+        res = await pipeline.synthesize_strategy(
+            problem_description="Distributed deadlock resolution",
+            domain="distributed_systems"
+        )
+        self.assertTrue(res.success)
+        self.assertIsNotNone(res.strategy)
+        # The "blind benchmark" stage never ran a benchmark -> NOT_MEASURED.
+        bench = res.strategy.benchmark_results
+        self.assertEqual(bench.get("measurement_status"), "NOT_MEASURED")
+        self.assertIsNone(bench.get("accuracy"))
+        # Measured sandbox latency is the only number reported.
+        self.assertIsInstance(bench.get("sandbox_latency_ms"), float)
+        self.assertEqual(res.strategy.latency_ms, bench["sandbox_latency_ms"])
+        # The strategy's own code must not embed a fake confidence score.
+        self.assertIn("confidence\": None", res.strategy.executable_code)
+        self.assertNotIn("0.94", res.strategy.executable_code)
+        # No fabricated benchmark score anywhere in the stage log.
+        for stage in res.stages_log:
+            self.assertNotIn("Benchmark score: 0.94", stage.details)
+            self.assertNotIn("0.94", stage.details)
+
+    async def test_ablation_study_is_explicitly_labeled_simulated(self):
+        from zerion.experiments.ablation_study import AblationStudyRunner
+        runner = AblationStudyRunner()
+        report = await runner.run_ablation_matrix()
+        self.assertEqual(len(report.ablation_results), 8)
+        for r in report.ablation_results:
+            self.assertEqual(r.measurement_status, "SIMULATED")
+        self.assertIn("World Model", report.most_critical_component)
+
+
+# ---------------------------------------------------------------------------
+# I032 — The cognitive runtime loop actually EXECUTES in the live engine.
+# Integration: flywheel events -> canonical pulse work -> persistent stores.
+# A class existing is not evidence; these tests observe real runtime work.
+# ---------------------------------------------------------------------------
+
+
+class TestI032RuntimeLoopExecutesInLiveEngine(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="inv_runtime_loop_")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    async def _emit_anomaly(self, engine, description: str) -> None:
+        from zerion.runtime.events import Event, EventType
+        await engine.event_bus.publish(Event(
+            event_type=EventType.ANOMALY_DETECTED,
+            payload={"objective": description, "description": description,
+                     "source": "i032_probe", "magnitude": 0.9},
+            source="i032_probe", priority=60,
+        ), dispatch_immediately=True)
+
+    async def test_flywheel_cycle_executes_pulse_work(self):
+        from zerion.engine import AscendantEngine
+        from zerion.cognitive_os.pulse_store import WorkStatus
+        engine = AscendantEngine(data_dir=self.temp_dir)
+        await engine.start()
+        try:
+            await engine.run_developmental_cycle()
+            completed = engine.cognitive_runtime.cognitive_pulse.store.list_work(
+                WorkStatus.COMPLETED)
+            # The flywheel's real events (observations, perception) must have
+            # driven the pulse to COMPLETED work — not just queued it.
+            self.assertGreater(len(completed), 0)
+            # A real anomaly event on the same bus generates canonical
+            # questions through the runtime's QuestionGenesis (wired path).
+            await self._emit_anomaly(engine, "Latency drift in i032 probe")
+            self.assertGreater(engine.cognitive_runtime.question_store.count(), 0)
+        finally:
+            await engine.stop()
+
+    async def test_pulse_work_persists_across_restart(self):
+        from zerion.engine import AscendantEngine
+        from zerion.cognitive_os.pulse_store import WorkStatus
+        engine = AscendantEngine(data_dir=self.temp_dir)
+        await engine.start()
+        try:
+            await engine.run_developmental_cycle()
+            await self._emit_anomaly(engine, "Persistent drift across restart")
+            q_count = engine.cognitive_runtime.question_store.count()
+            self.assertGreater(q_count, 0)
+            completed = engine.cognitive_runtime.cognitive_pulse.store.list_work(
+                WorkStatus.COMPLETED)
+            self.assertGreater(len(completed), 0)
+        finally:
+            await engine.stop()
+        # Cold restart on the same data dir: pulse work + questions survive.
+        engine2 = AscendantEngine(data_dir=self.temp_dir)
+        await engine2.start()
+        try:
+            self.assertEqual(engine2.cognitive_runtime.question_store.count(),
+                             q_count)
+            self.assertGreater(
+                len(engine2.cognitive_runtime.cognitive_pulse.store.list_work(
+                    WorkStatus.COMPLETED)), 0)
+        finally:
+            await engine2.stop()
+
+    async def test_tick_pulse_is_bounded(self):
+        from zerion.engine import AscendantEngine
+        engine = AscendantEngine(data_dir=self.temp_dir)
+        await engine.start()
+        try:
+            n = await engine.cognitive_runtime.tick_pulse(budget=2)
+            self.assertLessEqual(n, 2)
+        finally:
+            await engine.stop()
+
+    async def test_background_pulse_heartbeat_drives_the_loop(self):
+        import os as _os
+        from zerion.engine import AscendantEngine
+        from zerion.runtime.events import Event, EventType
+        prev = _os.environ.get("ZERION_PULSE_TICK_SECONDS")
+        _os.environ["ZERION_PULSE_TICK_SECONDS"] = "0.2"
+        try:
+            engine = AscendantEngine(data_dir=self.temp_dir)
+            await engine.start()
+            try:
+                self.assertIsNotNone(engine._pulse_driver_task)
+                # A real world event enqueues pulse work; the heartbeat must
+                # execute it without any explicit tick call from the test.
+                await engine.event_bus.publish(Event(
+                    event_type=EventType.OBSERVATION_RECORDED,
+                    payload={"objective": "heartbeat probe",
+                             "source": "i032_test"},
+                    source="i032_test", priority=40,
+                ), dispatch_immediately=True)
+                await asyncio.sleep(0.7)
+                history = engine.cognitive_runtime.cognitive_pulse.store.cycle_history()
+                self.assertGreater(len(history), 0)
+                work_states = {h["state"] for h in history}
+                self.assertTrue(
+                    any("WORK" in s for s in work_states)
+                    or any("ATTENTION" in s for s in work_states))
+            finally:
+                await engine.stop()
+        finally:
+            if prev is None:
+                _os.environ.pop("ZERION_PULSE_TICK_SECONDS", None)
+            else:
+                _os.environ["ZERION_PULSE_TICK_SECONDS"] = prev
 
 
 if __name__ == "__main__":

@@ -18,7 +18,11 @@ class CognitiveArchitectureTopology:
     name: str
     cell_sequence: List[str]
     is_active: bool = True
-    benchmark_accuracy: float = 0.90
+    # benchmark_accuracy is UNKNOWN (None) until a real measured benchmark run
+    # exists for the topology. Topology selection uses task_difficulty /
+    # uncertainty thresholds, never these values; fabricated defaults would
+    # violate the zero-fabrication policy.
+    benchmark_accuracy: Optional[float] = None
     avg_latency_ms: float = 15.0
     resource_cost: float = 1.0
 
@@ -30,7 +34,7 @@ class ArchitectureEvolutionController:
                 topology_id="top_reflex",
                 name="Fast Reflex Specialist",
                 cell_sequence=["OBSERVE", "RETRIEVE", "EXECUTE"],
-                benchmark_accuracy=0.88,
+                benchmark_accuracy=None,
                 avg_latency_ms=3.0,
                 resource_cost=0.1
             ),
@@ -38,7 +42,7 @@ class ArchitectureEvolutionController:
                 topology_id="top_experimental",
                 name="Deep Causal Experimentation",
                 cell_sequence=["OBSERVE", "DECOMPOSE", "HYPOTHESIZE", "EXPERIMENT", "VERIFY", "SYNTHESIZE"],
-                benchmark_accuracy=0.96,
+                benchmark_accuracy=None,
                 avg_latency_ms=25.0,
                 resource_cost=1.5
             ),
@@ -46,7 +50,7 @@ class ArchitectureEvolutionController:
                 topology_id="top_adversarial",
                 name="Multi-Path Adversarial Defense",
                 cell_sequence=["OBSERVE", "PLAN", "SEARCH", "ATTACK", "VERIFY", "SYNTHESIZE"],
-                benchmark_accuracy=0.97,
+                benchmark_accuracy=None,
                 avg_latency_ms=20.0,
                 resource_cost=1.2
             )

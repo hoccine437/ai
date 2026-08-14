@@ -15,6 +15,7 @@ from zerion.runtime.reality_audit import run_reality_audit
 async def run_cli():
     parser = argparse.ArgumentParser(description="ZERION-X GENESIS X10 Developmental Intelligence Organism")
     parser.add_argument("--status", action="store_true", help="Display full organism developmental status")
+    parser.add_argument("--readiness", action="store_true", help="Display ZERION LOCAL READINESS (real mic/STT/model/TTS/runtime/UI states; no API keys required)")
     parser.add_argument("--cycle", action="store_true", help="Execute 1 autonomous developmental flywheel cycle")
     parser.add_argument("--cycles", type=int, default=1, help="Execute N autonomous developmental flywheel cycles")
     parser.add_argument("--objective", action="store_true", help="Inspect active long-term continuous objectives")
@@ -58,8 +59,10 @@ async def run_cli():
             print(f"Active Objectives: {len(engine.continuous_objectives.list_active_objectives())}")
             print(f"Strategies Count:  {len(engine.strategy_registry.list_strategies())}")
             print(f"Capabilities:      {len(engine.self_model._capabilities)} active ({len(engine.capability_registry.list_born_capabilities())} born)")
-            print(f"Memory Episodes:   {len(engine.memory._episodes)}")
-            print(f"Distilled Rules:   {len(engine.memory._procedural_rules)}")
+            # Canonical Slice 4 stores — the legacy DevelopmentalMemoryStore is
+            # a deprecated read-only view and is no longer written by the runtime.
+            print(f"Memory Episodes:   {engine.cognitive_runtime.episode_store.count()}")
+            print(f"Distilled Rules:   {engine.cognitive_runtime.distilled_store.count()}")
 
         elif args.objective:
             print("\n=== ACTIVE CONTINUOUS OBJECTIVES ===")
@@ -88,11 +91,12 @@ async def run_cli():
                 print(f"  - {c['name']} ({c['category']}): Reliability={c['reliability']*100:.1f}%")
 
         elif args.memory:
-            print("\n=== DEVELOPMENTAL MEMORY STORES ===")
-            print(f"Episodic Logs:     {len(engine.memory._episodes)}")
-            print(f"Procedural Rules:  {len(engine.memory._procedural_rules)}")
-            for r in engine.memory.list_procedural_rules()[:5]:
-                print(f"  - {r.name}: {r.action_procedure}")
+            # Canonical Slice 4 memory stores (episodes + distilled experience).
+            print("\n=== CANONICAL MEMORY STORES ===")
+            print(f"Episodic Logs:     {engine.cognitive_runtime.episode_store.count()}")
+            print(f"Distilled Rules:   {engine.cognitive_runtime.distilled_store.count()}")
+            for d in engine.cognitive_runtime.distilled_store.list()[:5]:
+                print(f"  - [{d.type.value}] {d.statement[:90]}")
 
         elif args.genome:
             print("\n================ COGNITIVE GENOME (v%d) ================" % engine.genome_manager.current_genome.version)
@@ -165,14 +169,17 @@ async def run_cli():
             print(f"Report:               ZERION_COGNITIVE_BENCHMARK.md")
 
         elif args.ablation:
-            print("[GENESIS X10] Executing Systematic 11-Subsystem Ablation Study...")
+            print("[GENESIS X10] Ablation study (SIMULATED reference priors — "
+                  "no empirical ablation executed; scores are illustrative, "
+                  "NOT measurements)")
             from zerion.experiments.ablation_study import AblationStudyRunner
             runner = AblationStudyRunner()
             report = await runner.run_ablation_matrix()
-            print(f"Full Baseline Score: {report.full_ascendant_baseline:.4f}")
-            print(f"Most Critical:       {report.most_critical_component}")
+            print(f"Full Baseline Score (SIMULATED): {report.full_ascendant_baseline:.4f}")
+            print(f"Most Critical (SIMULATED):       {report.most_critical_component}")
             for res in report.ablation_results:
-                print(f"  {res.config_name:18}: Score={res.overall_score:.3f} (Drop: {res.degradation_percent:5.1f}%) Criticality: {res.criticality}")
+                print(f"  {res.config_name:18}: Score={res.overall_score:.3f} (Drop: {res.degradation_percent:5.1f}%) "
+                      f"Criticality: {res.criticality} [{res.measurement_status}]")
 
         elif args.trajectory:
             print("\n=== DEVELOPMENTAL LEARNING TRAJECTORY ===")
@@ -215,6 +222,11 @@ async def run_cli():
             snap = engine.scoreboard.capture_snapshot_from_evidence(evidence, cycles_run=engine._cycle_count)
             print(engine.scoreboard.render_summary_text(snap))
 
+        elif args.readiness:
+            # ZERION LOCAL READINESS — real measured per-subsystem states.
+            # No OpenAI/Gemini key is required; LOCAL is the canonical mode.
+            _print_readiness(engine)
+
         elif args.voice:
             # Slice 10.1: voice-first daemon. Runs the always-available voice
             # perception service with NO UI open. Reports the exact microphone
@@ -250,6 +262,9 @@ async def run_cli():
                 await server.stop()
 
         else:
+            # Canonical startup contract (spec §35): python main.py verifies
+            # local readiness from REAL runtime checks before running.
+            _print_readiness(engine)
             n = max(1, args.cycles)
             print(f"[GENESIS X10] Executing {n} autonomous developmental flywheel cycle(s)...")
             for i in range(n):
@@ -261,6 +276,37 @@ async def run_cli():
 
     finally:
         await engine.stop()
+
+
+def _print_readiness(engine: AscendantEngine) -> None:
+    """ZERION LOCAL READINESS — real measured per-subsystem states, never
+    hard-coded. No OpenAI/Gemini key is required; LOCAL is the canonical mode.
+    """
+    r = engine.local_readiness()
+    print("\n================ ZERION LOCAL READINESS ================")
+    print(f"MODE:            {r['mode']}")
+    mic = r["microphone"]
+    print(f"MICROPHONE:      {mic['status']}"
+          + (f"  ({mic['reason']})" if mic.get("reason") else ""))
+    stt = r["stt"]
+    print(f"LOCAL STT:       {stt['status']}"
+          + (f"  ({stt['reason']})" if stt.get("reason") else ""))
+    mod = r["models"]
+    print(f"LOCAL MODEL:     {mod['status']}"
+          + (f"  ({mod['dir']}, {mod['discovered']} discovered, "
+             f"{mod['available']} available)" if mod.get("dir") else ""))
+    tts = r["tts"]
+    print(f"LOCAL TTS:       {tts['status']}"
+          + (f"  ({tts['reason']})" if tts.get("reason") else ""))
+    rt = r["runtime"]
+    print(f"RUNTIME:         started={rt['started']} "
+          f"offline_mode={rt['offline_mode']}")
+    print(f"UI BRIDGE:       {r['ui']['status']}")
+    print(f"NETWORK:         {r['network'].get('state')} "
+          f"(LOCAL cognition never requires it)")
+    print(f"KEYS:            OPENAI={r['keys']['OPENAI_API_KEY']} "
+          f"GEMINI={r['keys']['GEMINI_API_KEY']} "
+          f"(none required for LOCAL mode)")
 
 
 def main():

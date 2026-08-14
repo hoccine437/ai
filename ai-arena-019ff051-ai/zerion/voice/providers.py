@@ -34,6 +34,21 @@ TTS = "TTS"
 WAKE = "WAKE"
 
 
+def wav_header(pcm_len: int, sample_rate: int = 16000,
+               channels: int = 1, sample_width: int = 2) -> bytes:
+    """RIFF/WAVE header for 16-bit PCM mono frames (real local STT input)."""
+    import struct
+    byte_rate = sample_rate * channels * sample_width
+    block_align = channels * sample_width
+    data_len = pcm_len
+    return b"".join([
+        b"RIFF", struct.pack("<I", 36 + data_len), b"WAVE",
+        b"fmt ", struct.pack("<IHHIIHH", 16, 1, channels, sample_rate,
+                             byte_rate, block_align, sample_width),
+        b"data", struct.pack("<I", data_len),
+    ])
+
+
 class VoiceEngineStatus(str):
     """Honest engine status values."""
     AVAILABLE = "AVAILABLE"
@@ -335,6 +350,139 @@ class VoiceEnvironment:
             "tts": self.detect_tts().to_dict(),
             "wake": self.detect_wake().to_dict(),
         }
+
+
+class SpeechToTextProvider:
+    """Canonical local-first speech-to-text provider (Slice 10.1).
+
+    Wraps the evidence-based ``VoiceEnvironment`` detection and executes REAL
+    offline STT engines (whisper.cpp / openai-whisper / vosk binaries) on the
+    captured PCM segment. Never fabricates a transcript: every failure is
+    reported as STT_UNAVAILABLE / STT_ERROR with the exact reason.
+
+    The cognitive runtime consumes only structured transcript events; it never
+    sees provider-specific objects.
+    """
+
+    def __init__(self, voice_env: Optional[VoiceEnvironment] = None):
+        self.env = voice_env or VoiceEnvironment()
+
+    def detect(self) -> VoiceEngineInfo:
+        return self.env.detect_stt()
+
+    def is_available(self) -> bool:
+        return self.detect().status == VoiceEngineStatus.AVAILABLE
+
+    def transcribe(self, segment: List[Any],
+                   allow_online: bool = False) -> Dict[str, Any]:
+        """Transcribe a list of AudioFrame-like objects (each with ``samples``).
+
+        Returns {status: SUCCESS | STT_UNAVAILABLE | STT_ERROR, transcript,
+        provider, reason, latency_ms}. ``allow_online`` is policy-gated; no
+        online adapter is wired, so it is reported honestly.
+        """
+        info = self.detect()
+        if info.status != VoiceEngineStatus.AVAILABLE or not info.engine_binary:
+            if allow_online:
+                return {"status": "STT_UNAVAILABLE", "transcript": "",
+                        "provider": "configured_online_stt",
+                        "reason": "online STT adapter not wired (policy-gated; "
+                                   "no SDK configured)", "latency_ms": 0.0}
+            return {"status": "STT_UNAVAILABLE", "transcript": "",
+                    "provider": "NO_PROVIDER",
+                    "reason": info.reason or "no STT provider available",
+                    "latency_ms": 0.0}
+        samples = b"".join([f.samples for f in segment
+                             if getattr(f, "samples", None) is not None])
+        if not samples:
+            return {"status": "STT_UNAVAILABLE", "transcript": "",
+                    "provider": info.name,
+                    "reason": "segment has no raw PCM samples; local STT "
+                               "requires actual audio", "latency_ms": 0.0}
+        binary = info.engine_binary
+        fd, wav_path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        t0 = time.perf_counter()
+        try:
+            with open(wav_path, "wb") as f:
+                f.write(wav_header(len(samples)))
+                f.write(samples)
+            try:
+                res = subprocess.run(
+                    [binary, wav_path], capture_output=True, text=True,
+                    timeout=20.0)
+            except FileNotFoundError:
+                return {"status": "STT_ERROR", "transcript": "",
+                        "provider": info.name,
+                        "reason": f"{binary} disappeared after detection",
+                        "latency_ms": 0.0}
+            except subprocess.TimeoutExpired:
+                return {"status": "STT_ERROR", "transcript": "",
+                        "provider": info.name,
+                        "reason": f"{info.name} timed out", "latency_ms": 0.0}
+            latency = (time.perf_counter() - t0) * 1000.0
+            if res.returncode != 0:
+                return {"status": "STT_ERROR", "transcript": "",
+                        "provider": info.name,
+                        "reason": f"{info.name} exited {res.returncode}: "
+                                   f"{res.stderr[:200]}", "latency_ms": 0.0}
+            transcript = (res.stdout or res.stderr or "").strip()
+            if not transcript:
+                return {"status": "STT_ERROR", "transcript": "",
+                        "provider": info.name,
+                        "reason": f"{info.name} produced empty output",
+                        "latency_ms": 0.0}
+            return {"status": "SUCCESS", "transcript": transcript[:500],
+                    "provider": info.name,
+                    "latency_ms": round(latency, 2)}
+        finally:
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.detect().to_dict()
+
+
+class LocalTextToSpeechProvider:
+    """Canonical local-first text-to-speech provider (Slice 10).
+
+    Produces REAL audio through the detected offline engine (espeak-ng /
+    espeak / pico2wave / flite / say / termux-tts-speak). Reports
+    LOCAL_TTS_UNAVAILABLE with the install/setup path when no engine exists —
+    it never pretends speech was generated.
+    """
+
+    def __init__(self, voice_env: Optional[VoiceEnvironment] = None):
+        self.env = voice_env or VoiceEnvironment()
+
+    def detect(self) -> VoiceEngineInfo:
+        return self.env.detect_tts()
+
+    def is_available(self) -> bool:
+        return self.detect().status == VoiceEngineStatus.AVAILABLE
+
+    def synthesize(self, text: str, out_path: Optional[str] = None,
+                   timeout_s: float = 15.0) -> Dict[str, Any]:
+        return self.env.synthesize(text, out_path=out_path, timeout_s=timeout_s)
+
+    def install_hint(self) -> str:
+        """Concrete setup path when the platform lacks an offline engine."""
+        platform = self.env.detect_platform()
+        if platform == "TERMUX":
+            return ("LOCAL_TTS_UNAVAILABLE: install Termux:API and run "
+                    "`pkg install termux-api` + enable TTS in Android settings "
+                    "(termux-tts-speak); or `pkg install espeak-ng`")
+        if platform == "ANDROID":
+            return ("LOCAL_TTS_UNAVAILABLE: use Termux:API (termux-tts-speak) "
+                    "or a local TTS engine; cloud TTS is not used")
+        return ("LOCAL_TTS_UNAVAILABLE: install an offline engine, e.g. "
+                "`apt install espeak-ng` (Linux), `brew install espeak` "
+                "(macOS), or use Windows SAPI")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.detect().to_dict()
 
 
 def sys_platform_is_desktop() -> bool:

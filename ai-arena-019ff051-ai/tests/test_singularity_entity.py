@@ -28,16 +28,29 @@ class TestSingularityEntity(unittest.IsolatedAsyncioTestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_entity_identity_and_commitments(self):
+        # ONE canonical identity: the entity adapter resolves to the canonical
+        # IdentityCore constants ("ZERION-X ASCENDANT") — never a second name.
         identity = CognitiveEntityIdentity()
-        self.assertEqual(identity.entity_name, "ZERION-X SINGULARITY")
+        self.assertEqual(identity.entity_name, "ZERION-X ASCENDANT")
+        self.assertEqual(identity.entity_id, "ascendant-core-v1")
         self.assertEqual(len(identity.commitments), 5)
         digest = identity.get_identity_digest()
         self.assertTrue(len(digest) > 20)
 
+    def test_entity_identity_derives_from_canonical_core(self):
+        from zerion.identity.persistence import IdentityCore
+        core = IdentityCore(storage_path=os.path.join(self.temp_dir, "identity.json"))
+        identity = CognitiveEntityIdentity(identity_core=core)
+        self.assertEqual(identity.entity_name, core.system_name)
+        self.assertEqual(identity.entity_id, core.system_id)
+        self.assertEqual(identity.get_identity_digest(), core.get_identity_hash())
+
     def test_entity_state_store_and_snapshots(self):
         db_file = os.path.join(self.temp_dir, "entity.db")
         store = CognitiveEntityStateStore(db_path=db_file)
-        
+
+        # Valid transition path only: STANDBY -> BOOTING -> PERCEIVING.
+        store.transition_state(EntityLifecycleState.BOOTING)
         store.transition_state(EntityLifecycleState.PERCEIVING)
         self.assertEqual(store.current_state, EntityLifecycleState.PERCEIVING)
 

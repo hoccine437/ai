@@ -1,7 +1,12 @@
 """
-Phase 5: Systematic Ablation Matrix
-Measures performance degradation across 8 distinct architectural configurations
-to scientifically isolate the contribution of each subsystem.
+Phase 5: Systematic Ablation Matrix (SIMULATED REFERENCE STUDY)
+
+This runner does NOT execute 8 real engine configurations. It emits a
+reference table of plausible ablation priors so the reporting/pipeline shape
+can be exercised. Every result is explicitly labeled SIMULATED with
+measurement_status=NOT_MEASURED — the scores are illustrative priors, never
+presented as measured performance. A real empirical ablation is a future
+instrumentation task, not this module.
 """
 
 import asyncio
@@ -22,6 +27,8 @@ class AblationResult:
     degradation_percent: float
     criticality: str  # "CRITICAL", "HIGH", "MODERATE", "NON_CONTRIBUTING"
     category_scores: Dict[str, float] = field(default_factory=dict)
+    # Honest provenance: SIMULATED means these numbers were never measured.
+    measurement_status: str = "SIMULATED"
 
 
 @dataclass
@@ -58,6 +65,9 @@ class AblationStudyRunner:
         ablation_results = []
         non_contributing = []
 
+        # NOTE: `tasks` is generated but no real engine configuration is run
+        # against it — see module docstring. All numbers below are SIMULATED
+        # reference priors and carry measurement_status="SIMULATED".
         for name, ablated, score in configs:
             deg = round(((full_score - score) / full_score) * 100.0, 2) if name != "Full_ASCENDANT" else 0.0
 

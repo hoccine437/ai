@@ -428,15 +428,27 @@ class CognitiveRouter:
                     self.ledger.record_outcome(
                         task=task, provider=provider_name, model=model_id,
                         success=True, latency_ms=resp.latency_ms, cost_cents=None)
+                usage = dict(resp.usage or {})
+                # Model identity (spec §39): provider, model filename, backend
+                # and inference timestamp ride on every successful result so
+                # cognition is traceable to the actual local execution.
+                identity = {
+                    "provider": provider_name,
+                    "model": model_id,
+                    "backend": usage.get("backend", "UNKNOWN"),
+                    "timestamp": usage.get("timestamp"),
+                    "task_id": task.task_id,
+                }
                 result = CognitiveResult(
                     task_id=task.task_id, provider=provider_name, model=model_id,
                     output=resp.output, latency_ms=resp.latency_ms,
-                    usage=resp.usage, status=ResultStatus.SUCCESS,
+                    usage=usage, status=ResultStatus.SUCCESS,
                     verification_required=task.verification_required,
                     verification_status=VerificationStatus.MODEL_OUTPUT,
                     confidence=resp.confidence, mode=mode,
                     metadata={"routing_policy_version": self.policy_version,
-                              "depth_level": sel.depth_level.value if sel.depth_level else None})
+                              "depth_level": sel.depth_level.value if sel.depth_level else None,
+                              "model_identity": identity})
                 await self._emit("PROVIDER_SUCCEEDED", {"provider": provider_name,
                                                         "model": model_id,
                                                         "latency_ms": resp.latency_ms})

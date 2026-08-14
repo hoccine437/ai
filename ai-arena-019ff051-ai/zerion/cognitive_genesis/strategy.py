@@ -23,7 +23,9 @@ class CognitiveStrategy:
     latency_ms: float = 50.0              # Estimated execution latency
     risk: float = 0.2                     # 0.0 to 1.0
     evidence_ids: List[str] = field(default_factory=list)
-    benchmark_results: Dict[str, float] = field(default_factory=dict)
+    # benchmark_results values may be None (NOT_MEASURED) alongside measured
+    # numbers; an explicit "measurement_status" key marks absent benchmarks.
+    benchmark_results: Dict[str, Any] = field(default_factory=dict)
     confidence: float = 0.85
     provenance: str = "cognitive_genesis"
     is_active: bool = True

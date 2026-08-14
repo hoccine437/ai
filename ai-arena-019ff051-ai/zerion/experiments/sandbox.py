@@ -24,8 +24,27 @@ class SandboxResult:
 
 
 class ExecutionSandbox:
-    def __init__(self, default_timeout_seconds: float = 5.0):
+    def __init__(self, default_timeout_seconds: float = 5.0, security: Optional[Any] = None):
         self.default_timeout = default_timeout_seconds
+        # Optional canonical SecurityBoundary. When present, every execution is
+        # authorized through it before a subprocess is spawned — a denial
+        # blocks execution and is audited (never silently bypassed).
+        self.security = security
+
+    def _authorized(self, temp_path: str, caller: str = "execution_sandbox") -> bool:
+        if self.security is None:
+            return True
+        try:
+            from zerion.runtime.security import PermissionLevel
+            return self.security.authorize(
+                action="execute_code",
+                target=temp_path,
+                required_permission=PermissionLevel.INTERNAL_EXECUTE,
+                caller=caller,
+                metadata={"subsystem": "execution_sandbox"},
+            )
+        except Exception:  # noqa: BLE001 — authorization failure must deny, never allow
+            return False
 
     async def run_python_code(self, code: str, timeout_seconds: Optional[float] = None) -> SandboxResult:
         timeout = timeout_seconds or self.default_timeout
@@ -35,6 +54,21 @@ class ExecutionSandbox:
             f.write(code)
             temp_path = f.name
 
+        if not self._authorized(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+            return SandboxResult(
+                success=False,
+                return_code=-1,
+                stdout="",
+                stderr="execution denied by security boundary",
+                duration_ms=round((time.perf_counter() - start_time) * 1000.0, 2),
+                timed_out=False,
+            )
+
+        process = None
         try:
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
@@ -72,6 +106,16 @@ class ExecutionSandbox:
                     timed_out=True
                 )
         finally:
+            # Close the subprocess transport while its event loop is still
+            # alive, so its destructor never runs against an already-closed
+            # loop at GC time (avoids the "Event loop is closed" warning).
+            if process is not None:
+                transport = getattr(process, "_transport", None)
+                if transport is not None:
+                    try:
+                        transport.close()
+                    except Exception:  # noqa: BLE001 — teardown only
+                        pass
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)

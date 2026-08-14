@@ -12,10 +12,24 @@ class AutopoieticReflectionEngine:
 
     def perform_reflection(
         self,
-        recent_learning_acceleration: float,
-        strategy_market_reputations: Dict[str, float],
+        recent_learning_acceleration: Optional[float],
+        strategy_market_reputations: Optional[Dict[str, float]],
         failed_tasks_count: int
     ) -> Dict[str, Any]:
+        # Honest reflection: a fabricated acceleration ratio (e.g. a hard-coded
+        # 2.57) must never be presented as a measured one. None means "not
+        # measured" and produces an UNMEASURED record — it does not trigger a
+        # plateau/failure diagnosis from invented evidence.
+        if recent_learning_acceleration is None:
+            reflection_record = {
+                "bottleneck_identified": "Unknown (learning acceleration not measured)",
+                "recommended_prescription": "Collect a measured learning acceleration before prescribing reflection changes.",
+                "acceleration_ratio": None,
+                "status": "UNMEASURED"
+            }
+            self._reflection_history.append(reflection_record)
+            return reflection_record
+
         bottleneck = "None"
         prescription = "Maintain current developmental loop trajectory."
 

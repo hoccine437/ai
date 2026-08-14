@@ -35,7 +35,10 @@ from zerion.voice.state_machine import (
     VoiceState,
     VoiceStateMachine,
 )
-from zerion.voice.providers import VoiceEnvironment
+from zerion.voice.providers import (
+    LocalTextToSpeechProvider,
+    VoiceEnvironment,
+)
 from zerion.ui.state_bridge import UIStateMode, UIStateBridge
 
 
@@ -96,6 +99,10 @@ class VoiceFirstInteractionPipeline:
         self.vad = VoiceActivityDetector()
         self.session_mgr = SecureVoiceSessionManager()
         self.voice_env = voice_env or VoiceEnvironment()
+        # Canonical local-first TTS provider: REAL offline synthesis only
+        # (espeak-ng / pico2wave / flite / say / termux-tts-speak); never
+        # claims speech without an engine.
+        self.tts_provider = LocalTextToSpeechProvider(voice_env=self.voice_env)
         self.state_machine = VoiceStateMachine()
 
         self._is_in_conversation = False
@@ -377,7 +384,7 @@ class VoiceFirstInteractionPipeline:
                 f"OUTPUT: '{cognitive_answer[:50]}'",
             ]
             tts_evidence = await asyncio.to_thread(
-                self.voice_env.synthesize, cognitive_answer)
+                self.tts_provider.synthesize, cognitive_answer)
             tts_status = tts_evidence.get("status", "VOICE_UNAVAILABLE")
             tts_engine = tts_evidence.get("engine")
             audio_path = tts_evidence.get("path")

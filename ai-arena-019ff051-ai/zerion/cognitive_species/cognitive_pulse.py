@@ -1,6 +1,17 @@
 """
-Cognitive Pulse & Species Runtime Substrate
-Implements resource-aware background wake pulse and the closed-loop Cognitive Species execution loop.
+Cognitive Pulse & Species Runtime Substrate  [DEPRECATED — isolated legacy]
+
+DEPRECATED: this legacy orchestrator is NOT part of the live ZERION-X runtime.
+It was removed from the engine because it maintained a PARALLEL GoalField
+(``goal_field.db``) and a second router — a competing source of truth. The
+canonical pulse is ``zerion/cognitive_os/pulse.py`` ``CognitivePulse`` (inside
+``CognitiveRuntime``). This module is kept only for legacy tests and must not
+be re-wired into the runtime.
+
+Honest-telemetry rule: this module never fabricates measurements. Bottleneck
+inputs that were not measured (latency, failure rate, procedural reuse) are
+reported as NOT_MEASURED, and goal progress is only advanced with real evidence
+strings from measured context metrics.
 """
 
 import asyncio
@@ -51,7 +62,8 @@ class CognitivePulseDaemon:
     async def _loop(self):
         while self._running:
             try:
-                await self.engine.run_species_pulse()
+                if hasattr(self.engine, "execute_pulse_cycle"):
+                    await self.engine.execute_pulse_cycle({"resource_metrics": {}})
                 await asyncio.sleep(self.interval)
             except asyncio.CancelledError:
                 break
@@ -86,7 +98,7 @@ class CognitiveSpeciesRuntime:
         # 2. FORMULATE COMPETING HYPOTHESES FOR ACTIVE GOAL
         hyps = self.hypothesis_engine.formulate_competing_hypotheses(active_goals[0].title)
 
-        # 3. DYNAMIC COGNITIVE DEPTH COMPUTATION
+        # 3. DYNAMIC COGNITIVE DEPTH COMPUTATION (config inputs, honest)
         depth = self.router.compute_cognitive_depth(
             uncertainty=0.5,
             novelty=0.4,
@@ -94,16 +106,24 @@ class CognitiveSpeciesRuntime:
             goal_relevance=0.9
         )
 
-        # 4. BOTTLENECK DISCOVERY
-        bottlenecks = self.bottleneck_detector.detect_bottlenecks(
-            avg_latency_ms=12.0,
-            failure_rate=0.03,
-            memory_usage_mb=850.0,
-            procedural_reuse_rate=0.85
-        )
+        # 4. BOTTLENECK DISCOVERY — ONLY from measured context metrics.
+        # Latency / failure rate / procedural reuse are NOT_MEASURED here and
+        # are never replaced with attractive placeholder numbers.
+        metrics = (context or {}).get("resource_metrics") or {}
+        cpu_percent = metrics.get("cpu_percent")
+        memory_mb = metrics.get("memory_mb")
+        measured = cpu_percent is not None or memory_mb is not None
+        if memory_mb is not None and memory_mb > 3000.0:
+            primary_bottleneck = "RESOURCE_LIMITATION"
+        else:
+            primary_bottleneck = "NONE"
 
-        # 5. ADVANCE GOAL PROGRESS
-        self.goal_field.advance_goal(active_goals[0].goal_id, 0.05, f"Verified pulse {pulse_id}")
+        # 5. ADVANCE GOAL PROGRESS only with REAL evidence. Unmeasured cycles
+        # advance nothing and are never reported as "reality learned".
+        if measured:
+            self.goal_field.advance_goal(
+                active_goals[0].goal_id, 0.0,
+                f"Pulse {pulse_id}: measured cpu_percent={cpu_percent}, memory_mb={memory_mb}")
 
         duration = (time.perf_counter() - t0) * 1000.0
         return SpeciesCycleTrace(
@@ -111,7 +131,7 @@ class CognitiveSpeciesRuntime:
             active_goals_count=len(active_goals),
             hypotheses_evaluated=len(hyps),
             selected_depth=depth.value,
-            primary_bottleneck=bottlenecks["primary_bottleneck"],
-            reality_learned=True,
+            primary_bottleneck=primary_bottleneck,
+            reality_learned=measured,
             duration_ms=round(duration, 2)
         )

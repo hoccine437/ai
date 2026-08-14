@@ -36,9 +36,6 @@ self-modification logic — all cognition stays in the Slice 1-9 subsystems.
 import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
-import os
-import subprocess
-import tempfile
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -52,7 +49,11 @@ from zerion.voice.audio import (
 )
 from zerion.voice.vad import VoiceActivityDetector, VADState
 from zerion.voice.wake_word import LayeredWakeWordDetector
-from zerion.voice.providers import VoiceEnvironment, VoiceEngineStatus
+from zerion.voice.providers import (
+    SpeechToTextProvider,
+    VoiceEngineStatus,
+    VoiceEnvironment,
+)
 from zerion.voice.state_machine import VoiceState
 from zerion.voice.watchdog import VoiceWatchdog
 
@@ -68,6 +69,8 @@ class MicPhase(str, Enum):
     MIC_INITIALIZING = "MIC_INITIALIZING"
     LISTENING = "LISTENING"
     SPEECH_DETECTED = "SPEECH_DETECTED"
+    TRANSCRIBING = "TRANSCRIBING"
+    TRANSCRIPT_READY = "TRANSCRIPT_READY"
     PROCESSING = "PROCESSING"
     SPEAKING = "SPEAKING"
     INTERRUPTED = "INTERRUPTED"
@@ -131,6 +134,10 @@ class VoicePerceptionService:
 
         self.wake_detector = wake_detector or LayeredWakeWordDetector()
         self.vad = vad or VoiceActivityDetector(now_fn=self._now)
+        # Canonical local-first STT provider (Slice 10.1). Real offline engine
+        # detection + execution; the cognitive runtime only ever consumes
+        # structured transcript events.
+        self.stt_provider = SpeechToTextProvider(voice_env=self.voice_env)
         self._stt_transcriber = stt_transcriber  # injectable (tests/demos)
 
         self.active_conversation_timeout_s = active_conversation_timeout_s
@@ -463,7 +470,7 @@ class VoicePerceptionService:
         if not segment:
             self._phase = MicPhase.LISTENING
             return
-        self._phase = MicPhase.PROCESSING
+        self._phase = MicPhase.TRANSCRIBING
         stt = await self._transcribe(segment)
         self.watchdog.beat("stt")
         if stt.status != "SUCCESS":
@@ -476,13 +483,14 @@ class VoicePerceptionService:
             # No transcript was produced: nothing is claimed, ever.
             self._phase = MicPhase.LISTENING
             return
+        self._phase = MicPhase.TRANSCRIPT_READY
         await self._handle_transcript(stt.transcript, via_stt=True,
                                       stt_provider=stt.provider or "stt")
 
     async def _transcribe(self, segment: List[AudioFrame]) -> STTResult:
-        """Local-first STT chain:
-        injected transcriber -> primary offline STT -> secondary offline STT
-        -> configured online STT (policy) -> NO_PROVIDER.
+        """Local-first STT chain through the canonical SpeechToTextProvider:
+        injected transcriber (test harness, always labeled) -> real offline
+        STT engine -> NO_PROVIDER. Never fabricates a transcript.
         """
         if self._stt_transcriber is not None:
             try:
@@ -498,82 +506,15 @@ class VoicePerceptionService:
                 return STTResult("STT_ERROR", reason=f"{type(e).__name__}: {e}",
                                  provider="injected_stt", simulated=True)
 
-        info = self.voice_env.detect_stt()
-        if info.status == VoiceEngineStatus.AVAILABLE:
-            res = await self._run_offline_stt(info, segment)
-            if res.status == "SUCCESS":
-                return res
-
-        if self.allow_online_stt and self.voice_env.network.check() == "ONLINE":
-            res = self._run_online_stt(segment)
-            if res.status == "SUCCESS":
-                return res
-
-        reason = info.reason
-        return STTResult("STT_UNAVAILABLE", provider="NO_PROVIDER",
-                         reason=reason or "no STT provider available")
-
-    async def _run_offline_stt(self, info: Any,
-                               segment: List[AudioFrame]) -> STTResult:
-        """Drive a real local STT binary (whisper.cpp / openai-whisper / vosk)
-        on the captured segment. Honest failure at every step."""
-        samples = b"".join([f.samples for f in segment if f.samples is not None])
-        if not samples:
-            return STTResult("STT_UNAVAILABLE",
-                             reason="segment has no raw PCM samples; local STT "
-                                    "requires actual audio",
-                             provider=info.name)
-        binary = info.engine_binary
-        if not binary:
-            return STTResult("STT_UNAVAILABLE",
-                             reason=f"{info.name} detected but no binary path",
-                             provider=info.name)
-        fd, wav_path = tempfile.mkstemp(suffix=".wav")
-        os.close(fd)
-        try:
-            with open(wav_path, "wb") as f:
-                f.write(_wav_header(len(samples), 16000))
-                f.write(samples)
-            t0 = time.perf_counter()
-            try:
-                res = subprocess.run(
-                    [binary, wav_path], capture_output=True, text=True,
-                    timeout=20.0)
-            except FileNotFoundError:
-                return STTResult("STT_ERROR",
-                                 reason=f"{binary} disappeared after detection",
-                                 provider=info.name)
-            except subprocess.TimeoutExpired:
-                return STTResult("STT_ERROR",
-                                 reason=f"{info.name} timed out",
-                                 provider=info.name)
-            latency = (time.perf_counter() - t0) * 1000.0
-            if res.returncode != 0:
-                return STTResult("STT_ERROR",
-                                 reason=f"{info.name} exited "
-                                        f"{res.returncode}: {res.stderr[:200]}",
-                                 provider=info.name)
-            transcript = (res.stdout or res.stderr or "").strip()
-            if not transcript:
-                return STTResult("STT_ERROR",
-                                 reason=f"{info.name} produced empty output",
-                                 provider=info.name)
-            return STTResult("SUCCESS", transcript=transcript[:500],
-                             provider=info.name,
-                             latency_ms=round(latency, 2))
-        finally:
-            try:
-                os.remove(wav_path)
-            except OSError:
-                pass
-
-    def _run_online_stt(self, segment: List[AudioFrame]) -> STTResult:
-        # No online STT adapter is wired (would require an SDK + key). This is
-        # reported honestly rather than fabricating a transcript.
-        return STTResult("STT_UNAVAILABLE",
-                         reason="online STT adapter not wired (policy-gated; "
-                                "no SDK configured)",
-                         provider="configured_online_stt")
+        result = await asyncio.to_thread(
+            self.stt_provider.transcribe, segment, self.allow_online_stt)
+        return STTResult(
+            status=result.get("status", "STT_ERROR"),
+            transcript=result.get("transcript", ""),
+            provider=result.get("provider"),
+            reason=result.get("reason", ""),
+            latency_ms=float(result.get("latency_ms", 0.0)),
+        )
 
     # ======================================================================
     # transcript handling: wake mode vs active conversation
@@ -878,6 +819,36 @@ class VoicePerceptionService:
                 and self._mic_available
                 and self.monitor.is_active())
 
+    def mic_status(self) -> str:
+        """Canonical microphone status (spec 16): MIC_READY /
+        MIC_UNAVAILABLE / LISTENING / TRANSCRIBING / TRANSCRIPT_READY /
+        MIC_ERROR — derived from the REAL phase, never a hard-coded claim.
+        """
+        p = self._phase
+        if not self._started:
+            return "MIC_OFF"
+        if p == MicPhase.UNAVAILABLE:
+            return "MIC_UNAVAILABLE"
+        if p in (MicPhase.INTERRUPTED,):
+            return "MIC_ERROR"
+        if p == MicPhase.TRANSCRIBING:
+            return "TRANSCRIBING"
+        if p == MicPhase.TRANSCRIPT_READY:
+            return "TRANSCRIPT_READY"
+        if p in (MicPhase.LISTENING, MicPhase.SPEECH_DETECTED,
+                 MicPhase.RECOVERING, MicPhase.PAUSED_BY_SYSTEM):
+            # Listening only counts when the mic pipeline is genuinely active.
+            if self.is_listening:
+                return "LISTENING"
+            if p == MicPhase.RECOVERING:
+                return "MIC_ERROR"
+            return "MIC_UNAVAILABLE"
+        if p == MicPhase.MIC_INITIALIZING:
+            return "MIC_READY"
+        if p in (MicPhase.PROCESSING, MicPhase.SPEAKING):
+            return "LISTENING" if self.is_listening else p.value
+        return p.value
+
     def telemetry(self) -> Dict[str, Any]:
         uptime = max(0.0, self._now() - self._started_at)
         frames_per_s = (self._frames_total / uptime) if uptime > 0.001 else 0.0
@@ -886,6 +857,7 @@ class VoicePerceptionService:
         return {
             "service_started": self._started,
             "mic_phase": self._phase.value,
+            "mic_status": self.mic_status(),
             "health": self.health().value,
             "is_listening": self.is_listening,
             "listening_mode": self._mode.value,
@@ -939,19 +911,3 @@ class VoicePerceptionService:
             ), dispatch_immediately=True)
         except Exception:  # noqa: BLE001 — voice must never crash on events
             pass
-
-
-def _wav_header(data_len: int, sample_rate: int = 16000,
-                channels: int = 1, bits: int = 16) -> bytes:
-    """Minimal RIFF/WAVE header for 16-bit PCM (little-endian)."""
-    byte_rate = sample_rate * channels * bits // 8
-    block_align = channels * bits // 8
-    return (b"RIFF" + (36 + data_len).to_bytes(4, "little") + b"WAVE"
-            + b"fmt " + (16).to_bytes(4, "little")
-            + (1).to_bytes(2, "little")
-            + channels.to_bytes(2, "little")
-            + sample_rate.to_bytes(4, "little")
-            + byte_rate.to_bytes(4, "little")
-            + block_align.to_bytes(2, "little")
-            + bits.to_bytes(2, "little")
-            + b"data" + data_len.to_bytes(4, "little"))

@@ -12,11 +12,20 @@ from zerion.identity.invariants import CORE_INVARIANTS, Invariant
 from zerion.identity.objectives import LongTermObjective, ObjectiveStatus
 
 
+# Canonical ZERION-X identity constants. There is exactly ONE identity in the
+# runtime; every other component (entity snapshots, provider adapters, voice,
+# UI telemetry) must derive its identity from this source. "ZERION-X
+# SINGULARITY" / "zerion-singularity-core-v1" was a legacy generation's name
+# and is no longer a live identity (see ZERION_X_ARCHITECTURAL_FREEZE.md V1).
+CANONICAL_SYSTEM_NAME = "ZERION-X ASCENDANT"
+CANONICAL_SYSTEM_ID = "ascendant-core-v1"
+
+
 class IdentityCore:
     def __init__(self, storage_path: str = "data/identity.json"):
         self.storage_path = Path(storage_path)
-        self.system_name: str = "ZERION-X ASCENDANT"
-        self.system_id: str = "ascendant-core-v1"
+        self.system_name: str = CANONICAL_SYSTEM_NAME
+        self.system_id: str = CANONICAL_SYSTEM_ID
         self.user_contract: UserContract = UserContract()
         self.invariants: List[Invariant] = list(CORE_INVARIANTS)
         self._objectives: Dict[str, LongTermObjective] = {}
@@ -54,6 +63,12 @@ class IdentityCore:
         """Computes cryptographic digest of core invariant configuration."""
         data_str = f"{self.system_name}:{self.system_id}:{[inv.id for inv in self.invariants]}"
         return hashlib.sha256(data_str.encode()).hexdigest()
+
+    def get_identity_digest(self) -> str:
+        """Canonical identity digest used by derived components (entity state,
+        snapshots, telemetry). All derived components MUST read identity from
+        the canonical IdentityCore — never from a competing identity class."""
+        return self.get_identity_hash()
 
     def save(self):
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)

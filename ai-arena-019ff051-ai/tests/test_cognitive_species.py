@@ -17,7 +17,6 @@ from zerion.cognitive_species.goal_field import GoalField, GoalItem
 from zerion.cognitive_species.hypothesis_engine import HypothesisCompetitionEngine, BottleneckDetector
 from zerion.cognitive_species.cognitive_pulse import CognitiveSpeciesRuntime
 from zerion.model_providers.router import CognitiveRouter, CognitiveDepthLevel
-from zerion.engine import AscendantEngine
 
 
 class TestCognitiveSpecies(unittest.IsolatedAsyncioTestCase):
@@ -77,16 +76,19 @@ class TestCognitiveSpecies(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(d_deep, CognitiveDepthLevel.D6_ARCHITECTURE)
 
     async def test_species_pulse_cycle_execution(self):
-        engine = AscendantEngine(data_dir=self.temp_dir)
-        await engine.start()
-        try:
-            pulse_trace = await engine.run_species_pulse()
-            self.assertIsNotNone(pulse_trace.pulse_id)
-            self.assertGreater(pulse_trace.active_goals_count, 0)
-            self.assertEqual(pulse_trace.hypotheses_evaluated, 3)
-            self.assertTrue(pulse_trace.reality_learned)
-        finally:
-            await engine.stop()
+        # The legacy CognitiveSpeciesRuntime is DEPRECATED and isolated from the
+        # live engine — tests construct it directly with REAL measured metrics.
+        species = CognitiveSpeciesRuntime(data_dir=self.temp_dir)
+        pulse_trace = await species.execute_pulse_cycle({
+            "resource_metrics": {"cpu_percent": 25.0, "memory_mb": 900.0}
+        })
+        self.assertIsNotNone(pulse_trace.pulse_id)
+        self.assertGreater(pulse_trace.active_goals_count, 0)
+        self.assertEqual(pulse_trace.hypotheses_evaluated, 3)
+        # Honest telemetry: reality_learned is True only because real resource
+        # metrics were provided; unmeasured dimensions are never fabricated.
+        self.assertTrue(pulse_trace.reality_learned)
+        self.assertEqual(pulse_trace.primary_bottleneck, "NONE")
 
 
 if __name__ == "__main__":

@@ -1,38 +1,35 @@
-# GGUF models — drop them here
+# ZERION X — LOCAL MODEL DIRECTORY (`models/`)
 
-This is the canonical local-model folder for Zerion. Save your `.gguf`
-file(s) directly in this directory (subfolders like `models/qwen/` work too —
-discovery is recursive).
+This directory is the **canonical local model directory**. ZERION scans it
+automatically at startup (`LocalModelDiscovery`) and discovers every supported
+model file whose name ends in `.gguf` (recursive scan, GGUF-magic validation,
+duplicate/oversize/path-escape rejection).
+
+## Usage
+
+Drop one or more GGUF files here, for example:
 
 ```
-ai-arena-019ff051-ai/models/your-model.gguf
+models/
+    qwen2.5-1.5b-q4_k_m.gguf
+    llama-3.2-1b-q4_k_m.gguf
 ```
 
-## How the runtime finds this folder
+- No model filename is hard-coded anywhere — discovery is by extension.
+- With one model, it is used. With several, selection is deterministic:
+  explicit `model_id` wins, otherwise the smallest valid model (fastest load
+  on constrained devices) is preferred; routing is observable in `reason`.
+- If no `.gguf` file exists, the runtime reports
+  `NO_LOCAL_MODEL_AVAILABLE` — it never pretends a model is loaded.
 
-`LocalGGUFProvider` / `LocalModelDiscovery` resolve the model directory in
-this order:
+## Inference backend
 
-1. `ZERION_MODELS_DIR` env var, if set (absolute or relative path).
-2. `models/` next to the runtime — this folder (`ai-arena-019ff051-ai/models`,
-   a sibling of the `zerion` package) — when the caller uses the runtime's
-   default `"models"`.
-3. `models/` relative to the current working directory (legacy fallback).
+`LocalGGUFProvider` (through the canonical `CognitiveModelProvider` boundary)
+uses the first REAL backend it finds:
 
-So on Termux/desktop you can either drop the model here and run normally, or
-point the runtime explicitly:
+1. `llama-cpp-python` (`pip install llama-cpp-python`) — desktop/server,
+2. `llama.cpp` CLI on `PATH` (`llama-cli` / `main`) — Termux/mobile via a
+   local llama.cpp build (see `../TERMUX.md`).
 
-```bash
-ZERION_MODELS_DIR="$HOME/ai-arena-019ff051-ai/models" python3 main.py --models
-```
-
-## Verify it was picked up
-
-From the runtime directory (`ai-arena-019ff051-ai/`):
-
-```bash
-python3 main.py --models
-```
-
-The file must be a real GGUF (starts with the `GGUF` magic header), ≤ 8 GiB,
-or it is reported as CORRUPTED/OVERSIZED rather than silently used.
+If neither backend exists, generation returns an honest structured
+`MODEL_LOAD_FAILURE` naming the missing piece — never canned text.

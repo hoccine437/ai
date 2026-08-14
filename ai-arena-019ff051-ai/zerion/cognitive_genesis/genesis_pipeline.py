@@ -57,6 +57,9 @@ class CognitiveGenesisPipeline:
         stages.append(StrategyGenesisStageResult("2_FORMALIZATION", True, f"Synthesized 4-step formal procedure for {strat_name}"))
 
         # Stage 3: Compile Executable Implementation
+        # NOTE: the generated strategy never reports a fabricated confidence (a
+        # hard-coded 0.94 in the template would be presented as if it were
+        # measured). Honest value is None until a real invocation observes one.
         default_code = f"""
 def execute_strategy(context):
     if not isinstance(context, dict):
@@ -66,7 +69,7 @@ def execute_strategy(context):
         "success": True,
         "resolved_target": target,
         "strategy": "{strat_name}",
-        "confidence": 0.94
+        "confidence": None
     }}
 """
         code = custom_code_template or default_code
@@ -137,11 +140,21 @@ print("ADVERSARIAL_PASSED")
             )
         stages.append(StrategyGenesisStageResult("7_ADVERSARIAL_TEST", True, "Adversarial boundary stress tests passed"))
 
-        # Stage 8: Blind Benchmark Evaluation
-        bench_score = 0.94
-        stages.append(StrategyGenesisStageResult("8_BLIND_BENCHMARK", True, f"Benchmark score: {bench_score}"))
+        # Stage 8: Blind Benchmark Evaluation — NO blind benchmark is executed
+        # in this pass, so no accuracy score is claimed. Only the real sandbox
+        # latency measured above (duration_ms) is reported. A hard-coded
+        # "bench_score = 0.94" would be a fabricated metric.
+        stages.append(StrategyGenesisStageResult(
+            "8_BLIND_BENCHMARK", True,
+            "No blind benchmark executed in this pass — accuracy NOT_MEASURED "
+            f"(measured sandbox latency: {sb_res.duration_ms:.2f} ms)"))
 
         # Stage 9: Canary & 10: Registration Packaging
+        # confidence is a DECLARED initial prior (class default 0.85), not a
+        # measurement; it is only calibrated after real invocations via
+        # CognitiveStrategy.record_execution. benchmark_results carries an
+        # explicit measurement_status so an absent benchmark is never presented
+        # as a measured score.
         strategy = CognitiveStrategy(
             name=strat_name,
             domain=domain,
@@ -151,10 +164,14 @@ print("ADVERSARIAL_PASSED")
             expected_benefit=f"Resolves {problem_description[:40]} with O(log N) verification",
             failure_modes=["Malformed context inputs", "External memory exhaustion"],
             cost=0.8,
-            latency_ms=12.0,
+            latency_ms=sb_res.duration_ms,
             risk=0.10,
-            benchmark_results={"accuracy": bench_score, "latency_ms": 12.0},
-            confidence=0.95,
+            benchmark_results={
+                "accuracy": None,
+                "measurement_status": "NOT_MEASURED",
+                "sandbox_latency_ms": sb_res.duration_ms,
+            },
+            confidence=0.85,
             provenance="cognitive_genesis_pipeline"
         )
         stages.append(StrategyGenesisStageResult("10_REGISTRATION", True, f"Packaged strategy {strat_name}"))

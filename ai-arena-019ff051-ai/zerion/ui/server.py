@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from zerion.ui.state_bridge import UIStateBridge, UIStateMode
 from zerion.runtime.evidence import collect_runtime_evidence
+from zerion.cognitive_os.episode import EpisodeStatus
 
 
 class GenesisWebServer:
@@ -185,9 +186,12 @@ class GenesisWebServer:
                 self._send_response(writer, 200, "application/json", json.dumps(caps).encode("utf-8"))
 
             elif method == "GET" and path == "/api/memory":
+                # Canonical Slice 4 stores — the legacy DevelopmentalMemoryStore
+                # is a deprecated read-only view, never a second write path.
                 mem = {
-                    "episodes_count": len(self.engine.memory._episodes),
-                    "procedural_rules": [r.to_dict() for r in self.engine.memory.list_procedural_rules()[:10]]
+                    "episodes_count": self.engine.cognitive_runtime.episode_store.count(),
+                    "distilled_count": self.engine.cognitive_runtime.distilled_store.count(),
+                    "distilled": [d.to_dict() for d in self.engine.cognitive_runtime.distilled_store.list()[:10]]
                 }
                 self._send_response(writer, 200, "application/json", json.dumps(mem).encode("utf-8"))
 
@@ -209,8 +213,15 @@ class GenesisWebServer:
                 self._send_response(writer, 200, "application/json", json.dumps(exp_res.to_dict()).encode("utf-8"))
 
             elif method == "POST" and path == "/api/learn":
-                distilled = self.engine.memory.trigger_distillation()
-                self._send_response(writer, 200, "application/json", json.dumps({"new_rules": len(distilled)}).encode("utf-8"))
+                # Canonical distillation of completed canonical episodes (the
+                # same path the CognitivePulse uses) — never the legacy store.
+                rt = self.engine.cognitive_runtime
+                new_rules = 0
+                for ep in rt.episode_store.list(status=EpisodeStatus.COMPLETED):
+                    produced = rt.experience_distillation.distill_episode(ep)
+                    new_rules += len(produced)
+                self._send_response(writer, 200, "application/json",
+                                    json.dumps({"new_rules": new_rules}).encode("utf-8"))
 
             elif method == "POST" and path == "/api/mission":
                 mis = self.engine.missions.create_mission("Autonomous Genesis Exploration")

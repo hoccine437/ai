@@ -281,6 +281,127 @@ class SoundDeviceMicrophoneMonitor(AudioInputMonitor):
                 "last_error": self._last_error}
 
 
+class TermuxMicrophoneMonitor(AudioInputMonitor):
+    # Real microphone on Android/Termux via the termux-api CLI
+    # (``termux-microphone-record``). Captures in bounded 1-second WAV chunks,
+    # decodes the 16-bit PCM, computes RMS and emits AudioFrames with raw
+    # samples for VAD/STT. Honest UNAVAILABLE when termux-api is missing; never
+    # fakes audio.
+
+    def __init__(self, samplerate: int = 16000, channels: int = 1,
+                 chunk_s: float = 1.0, on_frame: Optional[Callable] = None,
+                 now_fn=None, binary: Optional[str] = None):
+        super().__init__(on_frame=on_frame, now_fn=now_fn)
+        self.samplerate = samplerate
+        self.channels = channels
+        self.chunk_s = max(0.5, float(chunk_s))
+        self.binary = binary or _find_binary("termux-microphone-record")
+        self._proc: Any = None
+        self._last_error: Optional[str] = None
+
+    def _find_binary(self) -> Optional[str]:
+        return _find_binary("termux-microphone-record")
+
+    def init(self) -> Dict[str, Any]:
+        self._init_attempts += 1
+        binary = self.binary or self._find_binary()
+        if not binary:
+            self._last_error = "termux-microphone-record not found " \
+                "(install Termux:API: pkg install termux-api)"
+            return {"status": "UNAVAILABLE",
+                    "reason": self._last_error,
+                    "device": None, "transient": False}
+        self.binary = binary
+        return {"status": "OK", "reason": "termux-api microphone ready",
+                "device": "termux-microphone-record", "transient": False}
+
+    def _record_chunk(self, path: str) -> bytes:
+        # Bounded single-chunk capture; `-l` limits duration so the subprocess
+        # always exits and can never run away.
+        import subprocess
+        subprocess.run(
+            [self.binary, "-d", "-f", path, "-r", str(self.samplerate),
+             "-c", str(self.channels), "-l", str(int(self.chunk_s))],
+            capture_output=True, timeout=self.chunk_s + 8.0)
+        with open(path, "rb") as f:
+            return f.read()
+
+    @staticmethod
+    def _decode_rms_frames(data: bytes, samplerate: int,
+                           channels: int) -> List[AudioFrame]:
+        # Minimal RIFF parse for the 16-bit PCM WAV termux-microphone-record
+        # writes. Emits one AudioFrame per ~100ms of audio (bounded CPU).
+        import struct
+        import time as _t
+        if len(data) < 44 or data[:4] != b"RIFF":
+            return []
+        data_len = struct.unpack("<I", data[40:44])[0]
+        pcm = data[44:44 + data_len]
+        sample_bytes = 2 * channels
+        frame_len = max(1, samplerate // 10)  # 100ms blocks
+        frames: List[AudioFrame] = []
+        now = _t.time()
+        n = 0
+        for off in range(0, len(pcm) - sample_bytes + 1,
+                         sample_bytes * frame_len):
+            block = pcm[off:off + sample_bytes * frame_len]
+            if len(block) < sample_bytes:
+                break
+            n_samples = len(block) // sample_bytes
+            vals = struct.unpack("<" + "h" * n_samples, block[:2 * n_samples])
+            # Mono downmix + RMS in [-1, 1] float scale (matches the VAD).
+            if channels > 1:
+                vals = tuple(vals[i] for i in range(0, len(vals), channels))
+            if not vals:
+                continue
+            mean_sq = sum((v / 32768.0) ** 2 for v in vals) / len(vals)
+            frames.append(AudioFrame(
+                rms=float(mean_sq ** 0.5), timestamp=now + n * 0.1,
+                samples=block[:2 * len(vals)], source="termux_mic"))
+            n += 1
+        return frames
+
+    async def run(self) -> None:
+        import asyncio
+        import tempfile
+        while self._running:
+            try:
+                fd, path = tempfile.mkstemp(suffix=".wav")
+                os.close(fd)
+                data = self._record_chunk(path)
+                frames = self._decode_rms_frames(data, self.samplerate,
+                                                 self.channels)
+                for frame in frames:
+                    self.heartbeat()
+                    if self.on_frame is not None and self._running:
+                        try:
+                            self.on_frame(frame)
+                        except Exception:  # noqa: BLE001
+                            pass
+                if not frames:
+                    # No audio captured: keep the watchdog honest with a beat.
+                    self.heartbeat()
+                await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:  # noqa: BLE001 - capture failure must not kill the loop
+                self._last_error = f"{type(e).__name__}: {e}"
+                await asyncio.sleep(self.chunk_s)
+            finally:
+                try:
+                    os.remove(path)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def stop(self) -> None:
+        super().stop()
+
+    def describe(self) -> Dict[str, Any]:
+        return {"kind": "termux_mic", "available": self.binary is not None,
+                "simulated": False, "device": "termux-microphone-record",
+                "platform": "TERMUX", "last_error": self._last_error}
+
+
 class SimulatedMicrophoneMonitor(AudioInputMonitor):
     """DETERMINISTIC SIMULATION harness for tests and demos.
 
@@ -384,10 +505,36 @@ class SimulatedMicrophoneMonitor(AudioInputMonitor):
                     0, self.system_pauses - self._system_pauses_emitted)}
 
 
+def _find_binary(*names: str) -> Optional[str]:
+    import shutil
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
 def default_microphone_monitor(on_frame: Optional[Callable] = None,
                                now_fn=None) -> AudioInputMonitor:
-    """Pick the real monitor when the OS/backend permits it, else an honest
-    Null monitor. Never fabricates a microphone."""
+    """Pick the REAL monitor the platform permits, else an honest Null
+    monitor. Never fabricates a microphone:
+    - sounddevice present -> SoundDeviceMicrophoneMonitor
+    - Termux/Android with termux-api -> TermuxMicrophoneMonitor
+    - otherwise -> NullMicrophoneMonitor (exact reason)
+    """
     if _HAS_SOUNDDEVICE:
         return SoundDeviceMicrophoneMonitor(on_frame=on_frame, now_fn=now_fn)
+    try:
+        from zerion.voice.providers import VoiceEnvironment
+        platform = VoiceEnvironment.detect_platform()
+    except Exception:  # noqa: BLE001
+        platform = "UNKNOWN"
+    if platform == "TERMUX":
+        termux = TermuxMicrophoneMonitor(on_frame=on_frame, now_fn=now_fn)
+        if termux.binary is not None:
+            return termux
+        return NullMicrophoneMonitor(
+            reason="Termux microphone unavailable: termux-microphone-record "
+                   "not found (install Termux:API: pkg install termux-api)",
+            now_fn=now_fn)
     return NullMicrophoneMonitor(now_fn=now_fn)
