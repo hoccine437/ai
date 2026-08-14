@@ -29,9 +29,9 @@ DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024      # 8 GiB
 DEFAULT_MAX_LOADED_BYTES = 4 * 1024 * 1024 * 1024     # 4 GiB resident budget
 DEFAULT_MAX_LOADED_MODELS = 1
 
-# The repository's mobile UI folder, used as a canonical model drop location
-# (``zerion-compose-mobile-ui/models``) when it exists.
-MOBILE_UI_MODELS_FOLDER = "zerion-compose-mobile-ui"
+# Canonical repo location of the local-model folder: ``<project root>/models``
+# — a sibling of the ``zerion`` package (e.g. ``ai-arena-019ff051-ai/models``).
+RUNTIME_ROOT = Path(__file__).resolve().parents[2]
 
 
 def resolve_models_dir(default: str = "models",
@@ -41,11 +41,11 @@ def resolve_models_dir(default: str = "models",
     Priority (first match wins):
 
       1. ``ZERION_MODELS_DIR`` env var (absolute, or relative to ``base``/CWD).
-      2. ``zerion-compose-mobile-ui/models`` — the mobile UI folder in this
-         repository layout (checked both as a sibling of ``base`` and inside
-         ``base``) — when the caller is using the runtime's default
-         ``"models"`` and that folder exists.
-      3. ``default`` (normally ``models``, next to the runtime).
+      2. ``<project root>/models`` — the canonical repo folder (a sibling of
+         the ``zerion`` package, e.g. ``ai-arena-019ff051-ai/models``) — when
+         the caller is using the runtime's default ``"models"`` and that
+         folder exists. ``base`` overrides the detected root (used by tests).
+      3. ``default`` (normally ``models``, relative to the CWD).
 
     Explicit non-default paths pass through untouched (no auto-routing), so
     callers that opt into a specific directory always get exactly that
@@ -55,14 +55,10 @@ def resolve_models_dir(default: str = "models",
     if env:
         return env
     if str(Path(default)) == "models":
-        base = base or Path.cwd()
-        candidates = (
-            base.parent / MOBILE_UI_MODELS_FOLDER / Path(default).name,
-            base / MOBILE_UI_MODELS_FOLDER / Path(default).name,
-        )
-        for candidate in candidates:
-            if candidate.is_dir():
-                return str(candidate.resolve())
+        root = base or RUNTIME_ROOT
+        candidate = root / Path(default).name
+        if candidate.is_dir():
+            return str(candidate.resolve())
     return default
 
 

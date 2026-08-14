@@ -5,7 +5,7 @@ file(s) directly in this directory (subfolders like `models/qwen/` work too —
 discovery is recursive).
 
 ```
-zerion-compose-mobile-ui/models/your-model.gguf
+ai-arena-019ff051-ai/models/your-model.gguf
 ```
 
 ## How the runtime finds this folder
@@ -14,15 +14,16 @@ zerion-compose-mobile-ui/models/your-model.gguf
 this order:
 
 1. `ZERION_MODELS_DIR` env var, if set (absolute or relative path).
-2. `zerion-compose-mobile-ui/models` — this folder — when it exists
-   (checked as a sibling of the Python runtime, and inside the current dir).
-3. `models/` next to the runtime (legacy default).
+2. `models/` next to the runtime — this folder (`ai-arena-019ff051-ai/models`,
+   a sibling of the `zerion` package) — when the caller uses the runtime's
+   default `"models"`.
+3. `models/` relative to the current working directory (legacy fallback).
 
 So on Termux/desktop you can either drop the model here and run normally, or
 point the runtime explicitly:
 
 ```bash
-ZERION_MODELS_DIR="$HOME/zerion-compose-mobile-ui/models" python3 main.py --ui
+ZERION_MODELS_DIR="$HOME/ai-arena-019ff051-ai/models" python3 main.py --models
 ```
 
 ## Verify it was picked up

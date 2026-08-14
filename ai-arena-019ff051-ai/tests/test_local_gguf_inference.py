@@ -250,8 +250,9 @@ class LegacyGGUFAdapterTestCase(unittest.TestCase):
 
 
 class ResolveModelsDirTestCase(unittest.TestCase):
-    """Model-directory resolution: env override -> zerion-compose-mobile-ui
-    models folder -> runtime default. Explicit paths are never hijacked."""
+    """Model-directory resolution: env override -> <project root>/models
+    (the canonical repo folder) -> runtime default. Explicit paths are never
+    hijacked."""
 
     def setUp(self):
         self._root = Path(tempfile.mkdtemp(prefix="zerion_resolve_"))
@@ -269,14 +270,19 @@ class ResolveModelsDirTestCase(unittest.TestCase):
             resolved = resolve_models_dir("models", base=self._base)
         self.assertEqual(resolved, env_dir)
 
-    def test_mobile_ui_sibling_folder_wins_when_it_exists(self):
-        sibling = self._root / "zerion-compose-mobile-ui" / "models"
-        sibling.mkdir(parents=True, exist_ok=True)
-        resolved = resolve_models_dir("models", base=self._base)
-        self.assertEqual(Path(resolved), sibling.resolve())
+    def test_canonical_repo_models_folder_wins(self):
+        # The repository ships <project root>/models as the canonical local
+        # model folder; with the default "models" it is auto-detected even
+        # when the CWD is elsewhere.
+        repo_root = Path(__file__).resolve().parents[1]
+        with mock.patch.dict(os.environ, {"ZERION_MODELS_DIR": ""}):
+            resolved = resolve_models_dir("models")
+        self.assertEqual(Path(resolved), (repo_root / "models").resolve())
 
-    def test_mobile_ui_folder_inside_base_is_also_found(self):
-        inside = self._base / "zerion-compose-mobile-ui" / "models"
+    def test_models_next_to_base_wins(self):
+        # ``base`` stands in for the project root: models living directly
+        # inside it are found when the caller uses the default "models".
+        inside = self._base / "models"
         inside.mkdir(parents=True, exist_ok=True)
         resolved = resolve_models_dir("models", base=self._base)
         self.assertEqual(Path(resolved), inside.resolve())
@@ -286,10 +292,8 @@ class ResolveModelsDirTestCase(unittest.TestCase):
                          "models")
 
     def test_explicit_non_default_path_passes_through(self):
-        # Even when the mobile UI folder exists, an explicit path is never
+        # Even when the repo models folder exists, an explicit path is never
         # auto-routed anywhere else.
-        sibling = self._root / "zerion-compose-mobile-ui" / "models"
-        sibling.mkdir(parents=True, exist_ok=True)
         explicit = str(self._root / "elsewhere" / "models")
         self.assertEqual(resolve_models_dir(explicit, base=self._base),
                          explicit)

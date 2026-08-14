@@ -40,7 +40,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
  *
  * Mobile (portrait 9:16): fullscreen, edge-to-edge behind the status/nav bars,
  * immersive/screensaver-like. The only chrome is the low-opacity EXIT affordance
- * (top-left), the centered monospace status label beneath the bust, and the
+ * (top-left), the monospace status label beside the right shoulder at chest
+ * height (photo-fidelity placement — the holographic bust mock places
+ * `STATUS: LISTENING` at the lower right, next to the shoulder), and the
  * invisible manual-listen tap zone over the lower third with a subtle mic glyph.
  */
 object ZerionHomeScreenLayout {
@@ -61,9 +63,14 @@ object ZerionHomeScreenLayout {
     const val BUST_SCALE_FACTOR = 0.96f
     const val BUST_UNIT_DP = 150f
 
-    // Label / manual-listen zone placement (fractions of safe height).
-    const val STATUS_TEXT_Y_FRACTION = 0.62f
+    // Manual-listen zone placement (fraction of safe height).
     const val LISTEN_ZONE_TOP_FRACTION = 0.72f
+
+    // Status label: right-aligned next to the right shoulder, at chest height.
+    // 0.5h (vertical center) + this offset places it just below the shoulder
+    // tip — the photo reference shows it beside the shoulder, not centered.
+    const val STATUS_TEXT_OFFSET_Y_FRACTION = 0.07f
+    const val STATUS_TEXT_END_PADDING_DP = 20f
 }
 
 /**
@@ -144,8 +151,8 @@ fun ZerionHomeScreen(
                     ),
             )
 
-            // Status label, centered beneath the bust (portrait screens are
-            // narrow: text lives below the figure, not beside it).
+            // Status label: beside the right shoulder at chest height
+            // (photo-fidelity placement), small cyan monospace.
             val statusText = if (uiState.visualizationState == ZerionVisualizationState.BOOTING) {
                 "ASSEMBLING… ${uiState.assemblyPercentage}%"
             } else {
@@ -157,10 +164,11 @@ fun ZerionHomeScreen(
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
                 letterSpacing = 1.sp,
-                textAlign = TextAlign.Center,
+                textAlign = TextAlign.End,
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .offset(y = maxHeight * ZerionHomeScreenLayout.STATUS_TEXT_Y_FRACTION),
+                    .align(Alignment.CenterEnd)
+                    .padding(end = ZerionHomeScreenLayout.STATUS_TEXT_END_PADDING_DP.dp)
+                    .offset(y = maxHeight * ZerionHomeScreenLayout.STATUS_TEXT_OFFSET_Y_FRACTION),
             )
 
             // Manual listen trigger: a large invisible tap/hold zone over the

@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.PointMode
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -28,13 +29,24 @@ import kotlin.math.sin
  *
  * Rendering strategy (the Compose-idiomatic equivalent of a custom OpenGL ES
  * point-cloud shader):
- *  - one `drawPoints(PointMode.Points)` call per alpha bucket per frame —
- *    a handful of draw calls for thousands of particles, no polygons;
+ *  - one `drawPoints` call per alpha bucket per frame — a handful of draw
+ *    calls for thousands of particles, no polygons;
  *  - all particle state is preallocated in [ParticleBuffers] (positions,
- *    bucket indices, drift) — zero per-frame allocation in the draw loop;
+ *    bucket indices, drift, per-bucket Paints) — zero per-frame allocation
+ *    in the draw loop;
+ *  - bucket draws use `canvas.drawPoints(pts, offset, count, paint)` so ONLY
+ *    the particles written this frame are drawn — the full-array overload
+ *    used to leak stale points from previous frames (ghost dots);
  *  - the frame clock freezes while the app is backgrounded
  *    (`controller.active == false`), so a hidden screen does no simulation
  *    work and drains no battery.
+ *
+ * Photo-fidelity core (reference: holographic bust with warm voice-box):
+ *  - the face "energy core" is a stack of horizontal wavy amber lines
+ *    (ZerionGlowCoreSpec.WAVE_STACK_*) over a soft radial glow;
+ *  - the throat carries branching lightning-like yellow-orange tendrils
+ *    (ZerionGlowCoreSpec.TENDRILL_*) instead of a single straight spine;
+ *  - faint concentric sonar rings radiate from the bust while listening.
  *
  * States driven by the real runtime via ZerionVisualizationController:
  *  - BOOTING   — particles fly from scatter positions into the silhouette,
@@ -125,6 +137,9 @@ private fun DrawScope.drawBust(
         if (tier.enableGlow) {
             drawCoreGlow(state, audio, cx, cy, unit)
         }
+        // The wave-stack voice-box is the face identity, so it renders on every
+        // tier (it is ~35 cheap line draws, far cheaper than the glow).
+        drawFaceWaveStacks(state, audio, cx, cy, unit, clockMs)
     }
 
     drawParticles(
@@ -145,7 +160,7 @@ private fun DrawScope.drawBust(
     if (assembling) {
         drawBootOrb(cx, cy, unit)
     } else {
-        drawNeckSpine(state, audio, cx, cy, unit, bustScale)
+        drawThroatTendrils(state, audio, cx, cy, unit, bustScale)
     }
 }
 
@@ -188,9 +203,8 @@ private fun DrawScope.drawRings(
 }
 
 /**
- * Amber energy core visible through the face + thin neck spine conduit.
- * Speaking state: intensity is driven by live output-audio RMS.
- * Thinking state: brief amber -> ice-violet color shift.
+ * Soft amber radial glow behind the face (ambient energy bleed). The crisp
+ * wave-stack voice-box is drawn on top by [drawFaceWaveStacks].
  */
 private fun DrawScope.drawCoreGlow(
     state: ZerionVisualizationState,
@@ -229,6 +243,148 @@ private fun DrawScope.drawCoreGlow(
     drawRect(
         brush = Brush.radialGradient(colors, center = Offset(faceX, faceY), radius = radius),
         size = size,
+    )
+}
+
+/**
+ * Photo-fidelity "voice-box": a stack of horizontal wavy amber lines inside
+ * the face silhouette. Center bands glow brightest; speaking drives the whole
+ * stack from live audio RMS; thinking shifts to an ice-violet tint.
+ */
+private fun DrawScope.drawFaceWaveStacks(
+    state: ZerionVisualizationState,
+    audio: Float,
+    cx: Float,
+    cy: Float,
+    unit: Float,
+    clockMs: Float,
+) {
+    val intensity = when (state) {
+        ZerionVisualizationState.SPEAKING -> 0.55f + 0.55f * audio
+        ZerionVisualizationState.LISTENING -> 0.55f
+        ZerionVisualizationState.THINKING -> 0.60f
+        ZerionVisualizationState.EXECUTING,
+        ZerionVisualizationState.LEARNING -> 0.50f
+        ZerionVisualizationState.ERROR -> 0.30f
+        else -> 0.38f
+    }.coerceIn(0f, 1.15f)
+
+    val thinking = state == ZerionVisualizationState.THINKING
+    val bandColor = if (thinking) Color(0xFF8A6BFF) else Color(0xFFFFAE00)
+    val bandColorHot = if (thinking) Color(0xFFB79CFF) else Color(0xFFFFD060)
+
+    val halfWidth = ZerionGlowCoreSpec.WAVE_STACK_WIDTH * unit
+    val top = cy + ZerionGlowCoreSpec.WAVE_STACK_TOP_Y * unit
+    val spacing = ZerionGlowCoreSpec.WAVE_STACK_SPACING * unit
+    val amp = ZerionGlowCoreSpec.WAVE_STACK_AMP * unit
+    val waves = ZerionGlowCoreSpec.WAVE_STACK_WAVES
+    val mid = ZerionGlowCoreSpec.WAVE_STACK_BANDS / 2f
+    val segments = 6
+
+    for (k in 0 until ZerionGlowCoreSpec.WAVE_STACK_BANDS) {
+        // Center bands are hot; the stack fades toward the edges.
+        val centerFalloff = 1f - kotlin.math.abs(k - mid) / mid
+        val bandAlpha = (0.30f + 0.70f * centerFalloff) * intensity
+        if (bandAlpha <= 0.02f) continue
+
+        val y = top + k * spacing
+        val phase = clockMs * 0.005f + k * 0.9f
+        var prev: Offset? = null
+        for (s in 0..segments) {
+            val t = s / segments.toFloat()
+            val px = cx - halfWidth + t * 2f * halfWidth
+            val py = y + sin(t * waves * TAU + phase) * amp
+            val p = Offset(px, py)
+            if (prev != null) {
+                drawLine(
+                    color = if (s == segments || s == 0) bandColorHot.copy(alpha = bandAlpha)
+                    else bandColor.copy(alpha = bandAlpha),
+                    start = prev,
+                    end = p,
+                    strokeWidth = (1.6f + 0.8f * centerFalloff).dp.toPx(),
+                    cap = StrokeCap.Round,
+                )
+            }
+            prev = p
+        }
+    }
+}
+
+/**
+ * Branching lightning-like tendrils from the throat into the chest — the
+ * energy conduit from the voice-box. Two mirrored side branches fork off the
+ * main spine; speaking scales the glow from live audio RMS.
+ */
+private fun DrawScope.drawThroatTendrils(
+    state: ZerionVisualizationState,
+    audio: Float,
+    cx: Float,
+    cy: Float,
+    unit: Float,
+    bustScale: Float,
+) {
+    val glow = when (state) {
+        ZerionVisualizationState.SPEAKING -> 0.45f + 0.55f * audio
+        ZerionVisualizationState.THINKING -> 0.62f
+        ZerionVisualizationState.LISTENING -> 0.55f
+        else -> 0.38f
+    }.coerceIn(0f, 1f)
+
+    val y0 = cy + ZerionGlowCoreSpec.NECK_TOP_Y * unit          // throat (head base)
+    val yBase = cy + ZerionGlowCoreSpec.NECK_ORIGIN_Y * unit    // chest bottom
+    val w = (2.4f * bustScale).coerceAtLeast(1.3f).dp.toPx()
+
+    val coreColor = Color(0xFFFFD060).copy(alpha = glow)
+    val edgeColor = Color(0xFFFFAE00).copy(alpha = glow * 0.55f)
+
+    // Main spine: gentle zigzag down the center.
+    val spineMid = cy + (ZerionGlowCoreSpec.NECK_TOP_Y + 0.18f) * unit
+    val spinePoints = listOf(
+        Offset(cx, y0),
+        Offset(cx - 0.012f * unit, spineMid),
+        Offset(cx, yBase),
+    )
+    // Side branches fork from the upper spine and sweep outward-down,
+    // lightning-style (two segments each).
+    val leftTop = Offset(cx + ZerionGlowCoreSpec.NECK_TOP_LEFT_X * unit, spineMid)
+    val leftKnee = Offset(cx - ZerionGlowCoreSpec.TENDRILL_BRANCH_X * unit,
+        cy + ZerionGlowCoreSpec.TENDRILL_BRANCH_Y * unit)
+    val leftEnd = Offset(cx - ZerionGlowCoreSpec.TENDRILL_BRANCH_X2 * unit,
+        cy + ZerionGlowCoreSpec.TENDRILL_BRANCH_Y2 * unit)
+    val rightTop = Offset(cx + ZerionGlowCoreSpec.NECK_TOP_RIGHT_X * unit, spineMid)
+    val rightKnee = Offset(cx + ZerionGlowCoreSpec.TENDRILL_BRANCH_X * unit,
+        cy + ZerionGlowCoreSpec.TENDRILL_BRANCH_Y * unit)
+    val rightEnd = Offset(cx + ZerionGlowCoreSpec.TENDRILL_BRANCH_X2 * unit,
+        cy + ZerionGlowCoreSpec.TENDRILL_BRANCH_Y2 * unit)
+
+    fun strokeLine(from: Offset, to: Offset, strokeWidth: Float, color: Color) {
+        drawLine(color = color, start = from, end = to, strokeWidth = strokeWidth, cap = StrokeCap.Round)
+    }
+
+    // Under-glow pass (wider, dimmer) then core pass (thin, hot).
+    fun drawBranch(points: List<Offset>) {
+        for (i in 0 until points.size - 1) {
+            strokeLine(points[i], points[i + 1], w * 2.2f, edgeColor)
+            strokeLine(points[i], points[i + 1], w * 0.55f, coreColor)
+        }
+    }
+    drawBranch(spinePoints)
+    drawBranch(listOf(leftTop, leftKnee, leftEnd))
+    drawBranch(listOf(rightTop, rightKnee, rightEnd))
+}
+
+/** Boot: single bright blue orb low-center while the head is assembling. */
+private fun DrawScope.drawBootOrb(cx: Float, cy: Float, unit: Float) {
+    val center = Offset(cx, cy + 0.62f * unit)
+    val radius = 16f.dp.toPx()
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(Color.White, Color(0xFF1EC8FF), Color.Transparent),
+            center = center,
+            radius = radius * 2.2f,
+        ),
+        radius = radius,
+        center = center,
     )
 }
 
@@ -322,68 +478,17 @@ private fun DrawScope.drawParticles(
     }
 
     val strokeWidth = (1.8f * tier.qualityScale).dp.toPx()
+    val canvas = drawContext.canvas
     for (b in 0 until buffers.bucketCount) {
         val count = buffers.bucketSizes[b]
         if (count == 0) continue
-        drawPoints(
-            points = buffers.bucketPoints[b],
-            pointMode = PointMode.Points,
-            color = BUCKET_COLORS[b],
-            strokeWidth = strokeWidth,
-            cap = StrokeCap.Round,
-        )
+        // BUGFIX: the DrawScope convenience overload draws the ENTIRE float
+        // array, so stale points from previous frames leaked into every frame
+        // as ghost dots. The Canvas overload honors offset+count, so only the
+        // `count` points written this frame are rasterized.
+        buffers.bucketPaints[b].strokeWidth = strokeWidth
+        canvas.drawPoints(buffers.bucketPoints[b], 0, count, buffers.bucketPaints[b])
     }
-}
-
-/** Thin amber line down the throat/neck (energy conduit). */
-private fun DrawScope.drawNeckSpine(
-    state: ZerionVisualizationState,
-    audio: Float,
-    cx: Float,
-    cy: Float,
-    unit: Float,
-    bustScale: Float,
-) {
-    val glow = when (state) {
-        ZerionVisualizationState.SPEAKING -> 0.50f + 0.50f * audio
-        ZerionVisualizationState.THINKING -> 0.65f
-        ZerionVisualizationState.LISTENING -> 0.55f
-        else -> 0.38f
-    }.coerceIn(0f, 1f)
-
-    val y0 = cy + ZerionGlowCoreSpec.NECK_ORIGIN_Y * unit
-    val y1 = cy + ZerionGlowCoreSpec.NECK_TOP_Y * unit
-    val width = (2.2f * bustScale).coerceAtLeast(1.2f).dp.toPx()
-
-    drawLine(
-        color = Color(0xFFFF9A2E).copy(alpha = glow),
-        start = Offset(cx, y0),
-        end = Offset(cx, y1),
-        strokeWidth = width,
-        cap = StrokeCap.Round,
-    )
-    drawLine(
-        color = Color(0xFFFFD060).copy(alpha = glow * 0.45f),
-        start = Offset(cx - width * 0.5f, y0),
-        end = Offset(cx + width * 0.5f, y1),
-        strokeWidth = width * 0.35f,
-        cap = StrokeCap.Round,
-    )
-}
-
-/** Boot: single bright blue orb low-center while the head is assembling. */
-private fun DrawScope.drawBootOrb(cx: Float, cy: Float, unit: Float) {
-    val center = Offset(cx, cy + 0.62f * unit)
-    val radius = 16f.dp.toPx()
-    drawCircle(
-        brush = Brush.radialGradient(
-            colors = listOf(Color.White, Color(0xFF1EC8FF), Color.Transparent),
-            center = center,
-            radius = radius * 2.2f,
-        ),
-        radius = radius,
-        center = center,
-    )
 }
 
 /** Preallocated render buffers — never re-allocated in the frame loop. */
@@ -391,6 +496,16 @@ private class ParticleBuffers(val field: ZerionParticleField) {
     val bucketCount = BUCKET_COUNT
     val bucketPoints = Array(bucketCount) { FloatArray(2 * field.particleCount) }
     val bucketSizes = IntArray(bucketCount)
+    // One Paint per bucket (color is fixed per bucket); strokeWidth is updated
+    // per frame. Paints are reused forever — zero per-frame allocation.
+    val bucketPaints = Array(bucketCount) { i ->
+        Paint().apply {
+            color = BUCKET_COLORS[i]
+            style = Paint.Style.Stroke
+            strokeCap = StrokeCap.Round
+            isAntiAlias = true
+        }
+    }
     val driftY = FloatArray(field.particleCount)
     var lastClockMs: Float = 0f
 }
