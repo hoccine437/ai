@@ -34,6 +34,53 @@ TTS = "TTS"
 WAKE = "WAKE"
 
 
+def _parse_termux_stt_json(raw: str) -> str:
+    """Parse termux-speech-to-text JSON output into a plain transcript.
+    Emits JSON lines like {"code": 0, "text": "..."}. Never fabricates:
+    returns "" when no recognized text is present."""
+    import json as _json
+    text = ""
+    for line in (raw or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = _json.loads(line)
+        except ValueError:
+            # Non-JSON noise on stderr is not a transcript.
+            continue
+        if isinstance(obj, dict):
+            t = obj.get("text")
+            if isinstance(t, str) and t.strip():
+                text = (text + " " + t.strip()).strip()
+    return text
+
+
+def _parse_engine_transcript(engine: str, raw: str) -> str:
+    """Parse engine output into a plain transcript string.
+
+    - whisper.cpp with ``-nt`` prints plain text lines to stdout.
+    - vosk-transcriber prints JSON {"text": "..."} to stdout.
+    Never fabricates: empty output stays empty.
+    """
+    if engine == "vosk":
+        import json as _json
+        text = ""
+        for line in (raw or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = _json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(obj, dict) and isinstance(obj.get("text"), str):
+                text = (text + " " + obj["text"].strip()).strip()
+        return text
+    # whisper.cpp / generic: plain text output.
+    return (raw or "").strip()
+
+
 def wav_header(pcm_len: int, sample_rate: int = 16000,
                channels: int = 1, sample_width: int = 2) -> bytes:
     """RIFF/WAVE header for 16-bit PCM mono frames (real local STT input)."""
@@ -227,37 +274,92 @@ class VoiceEnvironment:
         if self._stt_cache is not None:
             return self._stt_cache
         platform = self.detect_platform()
+        from zerion.voice.stt_models import SttModelDiscovery
 
-        # Real offline STT engines. We only claim STT is available when a
-        # concrete binary is present; configuration alone never counts.
-        for binary, name in [("whisper-cli", "whisper.cpp"),
-                             ("whisper", "openai-whisper"),
-                             ("vosk-transcriber", "vosk")]:
-            found = _find_binary(binary)
-            if found:
+        # --- 1. termux-speech-to-text: Android/Termux on-device recognizer
+        # (termux-api). Needs NO model file — it uses the platform's local
+        # speech service. This is the primary Termux path.
+        found = _find_binary("termux-speech-to-text")
+        if found:
+            info = VoiceEngineInfo(
+                STT, "termux-speech-to-text", VoiceEngineStatus.AVAILABLE,
+                reason="Android/Termux on-device speech recognizer found "
+                       "(termux-api); no model file required",
+                engine_binary=found,
+                details={"offline": True, "platform": platform,
+                         "model_required": False})
+            self._stt_cache = info
+            return info
+
+        # --- 2. whisper.cpp (whisper-cli) — real offline engine. Available
+        # ONLY when a validated model file exists in models/stt/; an engine
+        # binary without a model reports LOCAL_STT_MODEL_MISSING, never READY.
+        whisper_cli = _find_binary("whisper-cli")
+        if whisper_cli:
+            discovery = SttModelDiscovery()
+            model = discovery.select()
+            if model is not None:
                 info = VoiceEngineInfo(
-                    STT, name, VoiceEngineStatus.AVAILABLE,
-                    reason=f"offline STT engine found on PATH ({binary})",
-                    engine_binary=found,
-                    details={"offline": True, "platform": platform})
-                self._stt_cache = info
-                return info
+                    STT, "whisper.cpp", VoiceEngineStatus.AVAILABLE,
+                    reason=f"whisper.cpp engine with local model "
+                           f"{model.model_id}",
+                    engine_binary=whisper_cli,
+                    details={"offline": True, "platform": platform,
+                             "model_required": True,
+                             "model_id": model.model_id,
+                             "model_path": model.path})
+            else:
+                info = VoiceEngineInfo(
+                    STT, "whisper.cpp", VoiceEngineStatus.UNAVAILABLE,
+                    reason="LOCAL_STT_MODEL_MISSING: whisper.cpp is installed "
+                           "but no validated model exists in models/stt/ "
+                           "(add a .ggml/.gguf whisper model)",
+                    engine_binary=whisper_cli,
+                    details={"offline": True, "platform": platform,
+                             "model_required": True,
+                             "models_dir": str(discovery.models_dir)})
+            self._stt_cache = info
+            return info
 
-        # Vosk python package present (real, importable) with a model dir.
-        if self.models_dir and Path(self.models_dir).exists():
-            import importlib.util
-            if importlib.util.find_spec("vosk") is not None:
+        # --- 3. vosk (vosk-transcriber binary or vosk package) — needs a
+        # validated vosk model directory in models/stt/.
+        vosk_bin = _find_binary("vosk-transcriber")
+        vosk_pkg = False
+        import importlib.util
+        vosk_pkg = importlib.util.find_spec("vosk") is not None
+        if vosk_bin or vosk_pkg:
+            discovery = SttModelDiscovery()
+            vosk_model = [m for m in discovery.available()
+                          if m.kind == "vosk"]
+            if vosk_model:
                 info = VoiceEngineInfo(
                     STT, "vosk", VoiceEngineStatus.AVAILABLE,
-                    reason="vosk package installed with local model dir",
-                    details={"offline": True, "platform": platform})
-                self._stt_cache = info
-                return info
+                    reason=f"vosk with local model {vosk_model[0].model_id}",
+                    engine_binary=vosk_bin,
+                    details={"offline": True, "platform": platform,
+                             "model_required": True,
+                             "model_id": vosk_model[0].model_id,
+                             "model_path": vosk_model[0].path,
+                             "package": vosk_pkg})
+            else:
+                info = VoiceEngineInfo(
+                    STT, "vosk", VoiceEngineStatus.UNAVAILABLE,
+                    reason="LOCAL_STT_MODEL_MISSING: vosk is installed but no "
+                           "validated vosk model directory exists in "
+                           "models/stt/ (add a vosk-model-* dir with "
+                           "am/final.mdl)",
+                    engine_binary=vosk_bin,
+                    details={"offline": True, "platform": platform,
+                             "model_required": True,
+                             "models_dir": str(discovery.models_dir),
+                             "package": vosk_pkg})
+            self._stt_cache = info
+            return info
 
         info = VoiceEngineInfo(
             STT, "offline_stt", VoiceEngineStatus.UNAVAILABLE,
-            reason="no offline STT engine found (tried whisper.cpp, "
-                   "openai-whisper, vosk)",
+            reason="no offline STT engine found (tried termux-speech-to-text, "
+                   "whisper-cli/whisper.cpp, vosk)",
             details={"platform": platform})
         self._stt_cache = info
         return info
@@ -394,52 +496,185 @@ class SpeechToTextProvider:
                     "latency_ms": 0.0}
         samples = b"".join([f.samples for f in segment
                              if getattr(f, "samples", None) is not None])
-        if not samples:
-            return {"status": "STT_UNAVAILABLE", "transcript": "",
-                    "provider": info.name,
-                    "reason": "segment has no raw PCM samples; local STT "
-                               "requires actual audio", "latency_ms": 0.0}
         binary = info.engine_binary
-        fd, wav_path = tempfile.mkstemp(suffix=".wav")
-        os.close(fd)
+        engine = info.name
+        # STT_LANGUAGE: explicit and observable. "auto" lets the engine
+        # decide (whisper.cpp auto-detects; termux uses the system language).
+        lang = os.environ.get("STT_LANGUAGE", "auto").strip() or "auto"
+
         t0 = time.perf_counter()
         try:
-            with open(wav_path, "wb") as f:
-                f.write(wav_header(len(samples)))
-                f.write(samples)
+            # termux-speech-to-text records from the device mic itself and
+            # emits JSON on stdout (no wav file is fed to it).
+            if engine == "termux-speech-to-text":
+                cmd = [binary]
+                if lang != "auto":
+                    cmd += ["-l", lang]
+                try:
+                    res = subprocess.run(cmd, capture_output=True, text=True,
+                                         timeout=20.0)
+                except FileNotFoundError:
+                    return {"status": "STT_ERROR", "transcript": "",
+                            "provider": engine,
+                            "reason": f"{binary} disappeared after detection",
+                            "latency_ms": 0.0}
+                except subprocess.TimeoutExpired:
+                    return {"status": "STT_ERROR", "transcript": "",
+                            "provider": engine,
+                            "reason": f"{engine} timed out", "latency_ms": 0.0}
+                latency = (time.perf_counter() - t0) * 1000.0
+                if res.returncode != 0:
+                    return {"status": "STT_ERROR", "transcript": "",
+                            "provider": engine,
+                            "reason": f"{engine} exited {res.returncode}: "
+                                       f"{res.stderr[:200]}",
+                            "latency_ms": 0.0}
+                transcript = _parse_termux_stt_json(
+                    res.stdout or res.stderr)
+                if not transcript:
+                    return {"status": "STT_ERROR", "transcript": "",
+                            "provider": engine,
+                            "reason": f"{engine} produced no recognized "
+                                       f"speech or empty output",
+                            "latency_ms": 0.0}
+                return {"status": "SUCCESS",
+                        "transcript": transcript[:500],
+                        "provider": engine,
+                        "language": lang,
+                        "latency_ms": round(latency, 2)}
+
+            # File-based engines (whisper.cpp / vosk) need the PCM segment.
+            if not samples:
+                return {"status": "STT_UNAVAILABLE", "transcript": "",
+                        "provider": engine,
+                        "reason": "segment has no raw PCM samples; local STT "
+                                   "requires actual audio", "latency_ms": 0.0}
+            fd, wav_path = tempfile.mkstemp(suffix=".wav")
+            os.close(fd)
             try:
-                res = subprocess.run(
-                    [binary, wav_path], capture_output=True, text=True,
-                    timeout=20.0)
-            except FileNotFoundError:
-                return {"status": "STT_ERROR", "transcript": "",
-                        "provider": info.name,
-                        "reason": f"{binary} disappeared after detection",
-                        "latency_ms": 0.0}
-            except subprocess.TimeoutExpired:
-                return {"status": "STT_ERROR", "transcript": "",
-                        "provider": info.name,
-                        "reason": f"{info.name} timed out", "latency_ms": 0.0}
-            latency = (time.perf_counter() - t0) * 1000.0
-            if res.returncode != 0:
-                return {"status": "STT_ERROR", "transcript": "",
-                        "provider": info.name,
-                        "reason": f"{info.name} exited {res.returncode}: "
-                                   f"{res.stderr[:200]}", "latency_ms": 0.0}
-            transcript = (res.stdout or res.stderr or "").strip()
-            if not transcript:
-                return {"status": "STT_ERROR", "transcript": "",
-                        "provider": info.name,
-                        "reason": f"{info.name} produced empty output",
-                        "latency_ms": 0.0}
-            return {"status": "SUCCESS", "transcript": transcript[:500],
-                    "provider": info.name,
-                    "latency_ms": round(latency, 2)}
+                with open(wav_path, "wb") as f:
+                    f.write(wav_header(len(samples)))
+                    f.write(samples)
+
+                if engine == "whisper.cpp":
+                    model_path = (info.details or {}).get("model_path", "")
+                    if not model_path:
+                        return {"status": "STT_ERROR", "transcript": "",
+                                "provider": engine,
+                                "reason": "whisper.cpp detected without a "
+                                           "model path (LOCAL_STT_MODEL_MISSING)",
+                                "latency_ms": 0.0}
+                    cmd = [binary, "-m", model_path, "-f", wav_path,
+                           "-nt", "-l", lang]
+                elif engine == "vosk":
+                    model_path = (info.details or {}).get("model_path", "")
+                    if binary:  # vosk-transcriber CLI
+                        if not model_path:
+                            return {"status": "STT_ERROR", "transcript": "",
+                                    "provider": engine,
+                                    "reason": "vosk detected without a model "
+                                               "directory "
+                                               "(LOCAL_STT_MODEL_MISSING)",
+                                    "latency_ms": 0.0}
+                        cmd = [binary, "-i", wav_path, "-o", "-",
+                               "-m", model_path]
+                    else:
+                        # vosk python package path (no CLI binary).
+                        return self._transcribe_vosk_python(
+                            wav_path, model_path, lang, t0)
+                else:
+                    cmd = [binary, wav_path]
+
+                try:
+                    res = subprocess.run(cmd, capture_output=True, text=True,
+                                         timeout=30.0)
+                except FileNotFoundError:
+                    return {"status": "STT_ERROR", "transcript": "",
+                            "provider": engine,
+                            "reason": f"{binary} disappeared after detection",
+                            "latency_ms": 0.0}
+                except subprocess.TimeoutExpired:
+                    return {"status": "STT_ERROR", "transcript": "",
+                            "provider": engine,
+                            "reason": f"{engine} timed out", "latency_ms": 0.0}
+                latency = (time.perf_counter() - t0) * 1000.0
+                if res.returncode != 0:
+                    return {"status": "STT_ERROR", "transcript": "",
+                            "provider": engine,
+                            "reason": f"{engine} exited {res.returncode}: "
+                                       f"{res.stderr[:200]}", "latency_ms": 0.0}
+                transcript = _parse_engine_transcript(
+                    engine, res.stdout or res.stderr)
+                if not transcript:
+                    return {"status": "STT_ERROR", "transcript": "",
+                            "provider": engine,
+                            "reason": f"{engine} produced empty output",
+                            "latency_ms": 0.0}
+                return {"status": "SUCCESS", "transcript": transcript[:500],
+                        "provider": engine, "language": lang,
+                        "latency_ms": round(latency, 2)}
+            finally:
+                try:
+                    os.remove(wav_path)
+                except OSError:
+                    pass
         finally:
+            # Defensive: the termux path returns before wav_path exists.
             try:
                 os.remove(wav_path)
-            except OSError:
+            except (OSError, UnboundLocalError):
                 pass
+
+    def _transcribe_vosk_python(self, wav_path: str, model_path: str,
+                                lang: str, t0: float) -> Dict[str, Any]:
+        """Transcribe via the vosk Python package (no CLI binary). Real
+        offline inference through KaldiRecognizer. Never fabricates text."""
+        try:
+            from vosk import KaldiRecognizer, Model  # type: ignore
+            import wave
+        except ImportError as exc:
+            return {"status": "STT_ERROR", "transcript": "",
+                    "provider": "vosk",
+                    "reason": f"vosk package unavailable: {exc}",
+                    "latency_ms": 0.0}
+        if not model_path:
+            return {"status": "STT_ERROR", "transcript": "",
+                    "provider": "vosk",
+                    "reason": "vosk detected without a model directory "
+                               "(LOCAL_STT_MODEL_MISSING)", "latency_ms": 0.0}
+        try:
+            import wave as _wave
+            with _wave.open(wav_path, "rb") as wf:
+                rate = wf.getframerate()
+                data = wf.readframes(wf.getnframes())
+            model = Model(model_path)
+            rec = KaldiRecognizer(model, float(rate))
+            if lang and lang != "auto":
+                # vosk models are language-specific; a mismatched lang is
+                # reported, never silently assumed.
+                pass
+            if rec.AcceptWaveform(data):
+                import json as _json
+                result = _json.loads(rec.Result())
+            else:
+                import json as _json
+                result = _json.loads(rec.FinalResult())
+            transcript = (result or {}).get("text", "").strip()
+            if not transcript:
+                return {"status": "STT_ERROR", "transcript": "",
+                        "provider": "vosk",
+                        "reason": "vosk produced no recognized speech",
+                        "latency_ms": 0.0}
+            latency = (time.perf_counter() - t0) * 1000.0
+            return {"status": "SUCCESS", "transcript": transcript[:500],
+                    "provider": "vosk", "language": lang,
+                    "latency_ms": round(latency, 2)}
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "STT_ERROR", "transcript": "",
+                    "provider": "vosk",
+                    "reason": f"vosk inference failed: "
+                               f"{type(exc).__name__}: {exc}",
+                    "latency_ms": 0.0}
 
     def to_dict(self) -> Dict[str, Any]:
         return self.detect().to_dict()

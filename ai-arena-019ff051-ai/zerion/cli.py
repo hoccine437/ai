@@ -289,8 +289,14 @@ def _print_readiness(engine: AscendantEngine) -> None:
     print(f"MICROPHONE:      {mic['status']}"
           + (f"  ({mic['reason']})" if mic.get("reason") else ""))
     stt = r["stt"]
-    print(f"LOCAL STT:       {stt['status']}"
-          + (f"  ({stt['reason']})" if stt.get("reason") else ""))
+    stt_status = stt.get("display_status") or stt["status"]
+    stt_detail = stt.get("reason") or ""
+    stt_models = stt.get("models") or {}
+    if stt_models.get("discovered") is not None:
+        stt_detail = (f"{stt_detail} · {stt_models['discovered']} model(s) "
+                      f"in {stt_models.get('dir', 'models/stt')}").strip(" ·")
+    print(f"LOCAL STT:       {stt_status}"
+          + (f"  ({stt_detail})" if stt_detail else ""))
     mod = r["models"]
     print(f"LOCAL MODEL:     {mod['status']}"
           + (f"  ({mod['dir']}, {mod['discovered']} discovered, "

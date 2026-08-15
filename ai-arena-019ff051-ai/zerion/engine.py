@@ -898,7 +898,20 @@ def profile_mobile_io_latency_and_throughput(payload):
 
         # LOCAL STT
         try:
-            out["stt"] = self.voice_env.detect_stt().to_dict()
+            stt = self.voice_env.detect_stt().to_dict()
+            if stt.get("status") == "AVAILABLE":
+                stt["display_status"] = "READY"
+            else:
+                stt["display_status"] = stt.get("status")
+            # Real model state from models/stt/ discovery (never assumed).
+            try:
+                from zerion.voice.stt_models import SttModelDiscovery
+                stt["models"] = SttModelDiscovery().report()
+            except Exception as e:  # noqa: BLE001
+                stt["models"] = {"status": "UNKNOWN",
+                                  "error": f"{type(e).__name__}: "
+                                            f"{str(e)[:120]}"}
+            out["stt"] = stt
         except Exception as e:  # noqa: BLE001
             out["stt"] = {"status": "UNKNOWN",
                            "error": f"{type(e).__name__}: {str(e)[:200]}"}
