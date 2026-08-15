@@ -2,7 +2,9 @@
 
 **Method:** repository-first. Every claim below was traced to executable code,
 call sites, and test results. The ASCENDANT ∞ documents were treated as claims
-to verify, never as evidence. All work is in the working tree (uncommitted).
+to verify, never as evidence. The core pass is committed (eff5b77); a fresh
+independent re-verification and the §18 end-to-end proof were added after
+(§21–22).
 
 **Verdict: PARTIAL — REAL BUT INCOMPLETE.** All four focus systems are
 genuinely constructed by the canonical `AscendantEngine` and exercised in the
@@ -249,3 +251,72 @@ measurable from code — several were fabricated at the source. This pass
 removed every fabrication it could reach and made the remaining gaps explicit
 (NOT_MEASURED / UNAVAILABLE / INCONCLUSIVE) with regression tests proving the
 honest behavior.
+
+---
+
+## 21. Independent re-verification pass (2026-08-15, after commit `eff5b77`)
+
+This report's own claims were re-verified directly against the committed
+code — the report was treated as a claim, not evidence. Every fix this pass
+made was confirmed present in source, and the full suite was re-run:
+
+- **Security:** `SecurityBoundary` deny-by-default; `ExecutionSandbox`
+  enforces the boundary (denying boundary → explicit denial, no subprocess);
+  `SelfModificationGate.approve()` calls `check_invariants` (INV-001/007/010
+  payloads) and requires SYSTEM_MUTATE; genesis stage 4 rejects forbidden
+  calls AND anti-gaming violations before registration. **CONFIRMED**
+  (code + `tests/test_ascendant_integrity.py`).
+- **Self-experiments:** `run_architecture_experiment` has no score defaults;
+  `None` + `NOT_MEASURED` without `eval_fn`; `sample_size` honored.
+  **CONFIRMED** (code).
+- **Benchmarking:** `BenchmarkRunner` / `AdversarialEvaluator` execute real
+  `BlindTaskGenerator(seed=…)` harnesses in the sandbox for the executable
+  categories only; all other categories `None`/NOT_MEASURED; comparisons
+  restricted to the measured subset; `ascension.py` post score is the real
+  post-benchmark with INCONCLUSIVE when unmeasured. **CONFIRMED** (code).
+- **Curve/calibration:** `long_horizon_100.py` has no synthetic formulas;
+  `calculate_brier_score()` returns `None` with zero samples; `scoreboard.py`
+  reports UNAVAILABLE/CONFIGURED_DEFAULT with provenance. **CONFIRMED**
+  (code).
+- **Lineage:** `compose_strategies` records `gain=0.0` (unmeasured);
+  retirement is non-destructive with provenance. **CONFIRMED** (code).
+- **Remaining-blocker check:** `record_prediction` still has zero runtime
+  callers (Brier honestly stays UNAVAILABLE) — **CONFIRMED** (call-site
+  search).
+
+**Fresh test counts:** full suite **866 passed / 2 skipped** (+1 new §18
+proof test); architectural invariants **89/89**; targeted integrity suite
+**35/35**.
+
+## 22. §18 runtime proof — deterministic end-to-end path (added this pass)
+
+New `tests/test_ascendant_e2e_runtime_proof.py` drives ONE real path through
+canonical ZERION X code, hop by hop, with no mocks and no fabricated values:
+
+```
+FAILURE (tool not found: bloom_filter)
+→ CLASSIFICATION (CapabilityGapDetector → TOOL_GAP)
+→ QUESTION (QuestionGenesis.generate_from_problem → real questions)
+→ HYPOTHESIS (formulated from the classified gap)
+→ STRATEGY CANDIDATE (CognitiveGenesisPipeline: stage 4 static/anti-gaming,
+  stage 5 sandbox unit, stage 7 adversarial — all real sandbox; stage 8
+  honestly NOT_MEASURED)
+→ SELF-EXPERIMENT (SelfExperimentationEngine, sample_size=3, eval_fn fed by
+  REAL sandbox pass/fail: control 0.0, treatment 1.0)
+→ VALIDATION (effect_size = +1.0 measured → ACCEPTED_FOR_PHENOTYPE, trial
+  persisted in history)
+→ REGISTRATION (StrategyRegistry.register_strategy + find_strategy_for_domain)
+→ LINEAGE (record_lineage with benchmark_gain = the MEASURED effect — INV-003)
+→ GENOME/PHENOTYPE IMPACT (get_phenotype → allocate_cognition: NORMAL mode,
+  reasoning_depth = phenotype.reasoning_depth,
+  parallel_paths = min(3, phenotype.parallel_width))
+→ RUNTIME EXECUTION (ExecutionSandbox on an unseen input)
+→ OUTCOME (TESTS_PASSED — real pass)
+→ TELEMETRY (CognitiveTelemetryLogger trace + collect_runtime_evidence
+  snapshot)
+```
+
+Result: `1 passed in 0.34s`. This proves the failure→recovery→strategy→
+lineage→phenotype→execution→telemetry chain is executable through actual
+ZERION X code, and that every measured value in the chain originates from a
+real execution (never a constant).
