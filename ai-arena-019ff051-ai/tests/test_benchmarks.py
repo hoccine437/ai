@@ -36,14 +36,34 @@ class TestBenchmarks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(im.false_initiative_rate, 0.2)
 
     async def test_14_category_benchmark_run(self):
+        """The 14 categories are evaluated honestly: executable harnesses
+        (coding/debugging/tool_use) are MEASURED inside the sandbox; the
+        remaining categories are NOT_MEASURED and excluded from the composite.
+        No fabricated 0.95 scores anywhere."""
         suite = build_default_benchmark_suite()
         self.assertEqual(len(suite), 14)
 
         runner = BenchmarkRunner(tasks=suite)
         report = await runner.run_all()
         self.assertEqual(report.total_tasks, 14)
+        # Exactly the executable categories are measured (fixed-seed harnesses).
+        self.assertEqual(report.measured_tasks, 3)
+        unmeasured = [r for r in report.task_results
+                      if r.ascendant_score is None]
+        self.assertEqual(len(unmeasured), 11)
+        for r in unmeasured:
+            self.assertEqual(r.details.get("measurement_status"),
+                             "NOT_MEASURED")
+        # Measured tasks are scored from real pass/fail (these harnesses pass).
+        measured = [r for r in report.task_results if r.ascendant_score is not None]
+        for r in measured:
+            self.assertEqual(r.ascendant_score, 1.0)
+            self.assertTrue(r.verification_passed)
+            self.assertEqual(r.details.get("measurement_status"), "MEASURED")
+        # Composite is computed over measured tasks only.
         self.assertGreater(report.composite_improvement_ratio, 1.0)
-        self.assertGreater(report.effective_intelligence_score, 0.0)
+        # Transfer is not measured -> composite intelligence honestly unavailable.
+        self.assertIsNone(report.effective_intelligence_score)
 
     def test_scoreboard_rendering(self):
         # Regression test for the ZERION correction phase: the scoreboard must be

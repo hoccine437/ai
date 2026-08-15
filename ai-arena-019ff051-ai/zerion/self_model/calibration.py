@@ -5,7 +5,7 @@ Confidence Calibration and Brier Score Tracker
 from dataclasses import dataclass, field
 import math
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -28,13 +28,18 @@ class ConfidenceCalibrator:
             timestamp=time.time()
         ))
 
-    def calculate_brier_score(self) -> float:
+    def calculate_brier_score(self) -> Optional[float]:
         """
         Brier Score: Mean squared difference between stated confidence and binary outcome.
         0.0 = perfect calibration, 1.0 = completely inverted.
+
+        Honesty contract (INV-001): with ZERO recorded predictions the score
+        is ``None`` (NOT_MEASURED) — not a vacuous 0.0. A "perfect" 0.0 with
+        no samples would fabricate calibration (and previously inflated
+        cognitive maturity to L7).
         """
         if not self._samples:
-            return 0.0
+            return None
         total_sq_err = sum(
             (s.stated_confidence - (1.0 if s.actual_outcome else 0.0)) ** 2
             for s in self._samples

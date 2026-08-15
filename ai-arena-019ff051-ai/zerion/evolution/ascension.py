@@ -61,20 +61,32 @@ class AscensionEngine:
         old_depth = self.plasticity.current.reasoning_depth
         self.plasticity.apply_mutation({"reasoning_depth": old_depth + 1})
 
-        # 5. Benchmark Post-Mutation
+        # 5. Benchmark Post-Mutation — the post score MUST come from a real
+        # benchmark run; it is never base+constant (INV-001).
         post_report = await self.benchmarks.run_all()
-        post_intel = round(min(1.0, base_intel + 0.04), 4)
+        post_intel = post_report.effective_intelligence_score
 
-        # 6. Compare & Decide Promotion / Rollback
-        if post_intel >= base_intel:
+        # 6. Compare & Decide Promotion / Rollback. When either side is
+        # unmeasured, the comparison is INCONCLUSIVE — no promotion, no
+        # rollback, no fabricated gain.
+        if base_intel is None or post_intel is None:
+            promoted = False
+            rolled_back = False
+            details = {"verdict": "INCONCLUSIVE",
+                       "reason": "effective intelligence not measurable "
+                                  "(transfer factor unmeasured); no promotion "
+                                  "or rollback claimed"}
+        elif post_intel >= base_intel:
             promoted = True
             rolled_back = False
-            details = {"verdict": "PROMOTED", "gain": round(post_intel - base_intel, 4)}
+            details = {"verdict": "PROMOTED",
+                       "gain": round(post_intel - base_intel, 4)}
         else:
             promoted = False
             rolled_back = True
             self.plasticity.rollback_to_previous()
-            details = {"verdict": "ROLLED_BACK", "reason": "Benchmark score regressed"}
+            details = {"verdict": "ROLLED_BACK",
+                       "reason": "Benchmark score regressed"}
 
         report = AscensionCycleReport(
             cycle_id=cycle_id,

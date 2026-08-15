@@ -85,6 +85,7 @@ class RuntimeEvidence:
     has_pressure_field: bool
     collected_at: float = field(default_factory=time.time)
     source: str = "engine_live_state"
+    brier_samples: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -114,8 +115,10 @@ def collect_runtime_evidence(engine: Any) -> RuntimeEvidence:
     """
     try:
         brier = engine.self_model.calibrator.calculate_brier_score()
+        brier_samples = len(getattr(engine.self_model.calibrator, "_samples", []))
     except Exception:
         brier = None
+        brier_samples = 0
 
     try:
         acc_ratio = engine.learning_to_learn.calculate_learning_acceleration()
@@ -131,6 +134,7 @@ def collect_runtime_evidence(engine: Any) -> RuntimeEvidence:
         active_objectives_count=len(engine.continuous_objectives.list_active_objectives()),
         flywheel_cycles=engine._cycle_count,
         brier_score=brier,
+        brier_samples=brier_samples,
         learning_acceleration=acc_ratio,
         has_native_caps=len(engine.self_model._capabilities) > 0,
         has_adaptive_phenotypes=True,   # structurally always constructed at engine.start(); not a measured count

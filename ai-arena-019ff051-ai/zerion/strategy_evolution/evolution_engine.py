@@ -113,7 +113,11 @@ class StrategyEvolutionEngine:
             confidence=round((strat_a.confidence + strat_b.confidence) / 2.0, 3),
             provenance="strategy_composition"
         )
-        self.record_lineage(composite_id, parent_id=strat_a.strategy_id, derivation_type="composition", gain=0.05)
+        # Honest provenance: the composite's benchmark_gain is NOT measured at
+        # composition time. 0.0 means unmeasured (INV-003); a hard-coded
+        # "+0.05" would be a fabricated gain.
+        self.record_lineage(composite_id, parent_id=strat_a.strategy_id,
+                            derivation_type="composition", gain=0.0)
         return composed
 
     def retire_strategy(self, strategy: CognitiveStrategy, reason: str, superseded_by: Optional[str] = None):

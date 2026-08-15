@@ -18,9 +18,11 @@ NOT VERIFIED — the structured failure path it produces IS verified here.
 
 import asyncio
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -74,23 +76,49 @@ class TestMainPyCanonicalEntrypoint(unittest.TestCase):
         # The readiness values must be real states, never hard-coded READY.
         self.assertIn("NO_LOCAL_MODEL_AVAILABLE", out)
 
-    def test_default_python_main_py_runs_flywheel(self):
-        """`python main.py` (no flags) prints readiness then executes the real
-        Zerion X developmental flywheel — the canonical startup command."""
-        proc = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--cycles", "1",
-             "--data-dir", _tmp()],
-            capture_output=True, text=True, timeout=120,
+    def test_default_python_main_py_enters_active_runtime_and_stays_alive(self):
+        """`python main.py` (no flags) prints readiness, executes the real
+        Zerion X developmental flywheel, prints the scoreboard, then enters
+        ACTIVE / WAITING_FOR_EVENTS and STAYS ALIVE until explicit shutdown
+        (SIGINT) — it must NOT exit after the initial cycle (lifecycle fix)."""
+        proc = subprocess.Popen(
+            [sys.executable, "-u", str(MAIN_PY), "--data-dir", _tmp()],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             env=_no_key_env(), cwd=str(REPO_ROOT))
-        out = proc.stdout + proc.stderr
-        self.assertEqual(proc.returncode, 0,
-                         msg=f"main.py exited {proc.returncode}:\n{out}")
-        self.assertIn("ZERION LOCAL READINESS", out)
-        self.assertIn("MODE:            LOCAL", out)
-        self.assertIn("developmental flywheel cycle", out)
-        # No competing legacy architecture banner: the flywheel belongs to the
-        # canonical AscendantEngine (GENESIS X10 line, real runtime).
-        self.assertIn("[GENESIS X10]", out)
+        lines: list = []
+        try:
+            deadline = time.monotonic() + 90
+            saw_cycle = saw_active = False
+            while time.monotonic() < deadline:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                lines.append(line)
+                if "developmental flywheel cycle" in line:
+                    saw_cycle = True
+                if "ZERION RUNTIME: ACTIVE" in line:
+                    saw_active = True
+                if saw_cycle and saw_active and "STATE: WAITING_FOR_EVENTS" in line:
+                    break
+            out = "".join(lines)
+            self.assertTrue(saw_cycle, msg=f"no flywheel cycle line:\n{out}")
+            self.assertTrue(saw_active, msg=f"never reached ACTIVE runtime:\n{out}")
+            self.assertIn("ZERION LOCAL READINESS", out)
+            self.assertIn("MODE:            LOCAL", out)
+            self.assertIn("[GENESIS X10]", out)
+            # The process must still be alive AFTER the cycle + scoreboard.
+            self.assertIsNone(proc.poll(),
+                              msg=f"main.py exited after the cycle: {out}")
+            # Explicit shutdown -> clean exit code 0.
+            proc.send_signal(signal.SIGINT)
+            proc.wait(timeout=20)
+            self.assertEqual(proc.returncode, 0,
+                             msg=f"main.py exited {proc.returncode} on SIGINT:\n"
+                                 f"{out}")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
 
 
 class TestNoCannedCognitiveFallback(unittest.TestCase):

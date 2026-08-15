@@ -731,13 +731,17 @@ class AscendantEngine:
 
         # 14. ASSESS MATURITY LEVEL (real measurements from the canonical
         # episode/distilled stores — never the legacy in-memory dicts).
+        # Brier is None until real predictions exist; unmeasured calibration
+        # must NOT earn maturity credit, so it is mapped to the worst case 1.0
+        # for the gate (never a fabricated 0.0).
+        _brier = self.self_model.calibrator.calculate_brier_score()
         maturity = self.maturity_evaluator.evaluate(
             has_native_caps=True,
             episodes_count=self.cognitive_runtime.episode_store.count(),
             procedural_rules_count=self.cognitive_runtime.distilled_store.count(),
             has_adaptive_phenotypes=True,
             has_pressure_field=True,
-            brier_score=self.self_model.calibrator.calculate_brier_score(),
+            brier_score=(_brier if _brier is not None else 1.0),
             born_capabilities_count=len(self.capability_registry.list_born_capabilities()),
             synthesized_strategies_count=len(self.strategy_registry.list_strategies()),
             learning_acceleration=acc_ratio,

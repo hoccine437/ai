@@ -6,10 +6,54 @@ Implements full CLI interrogation, status monitoring, benchmark execution, and U
 import argparse
 import asyncio
 import json
+import signal
 import sys
 from zerion.engine import AscendantEngine
 from zerion.runtime.evidence import collect_runtime_evidence
 from zerion.runtime.reality_audit import run_reality_audit
+
+
+async def _enter_persistent_runtime(engine: AscendantEngine,
+                                    shutdown_event: asyncio.Event) -> None:
+    """Transition the CLI process into the ACTIVE runtime state and wait.
+
+    The runtime itself (event bus, CognitivePulse driver, voice perception,
+    UI bridge) is already running underneath ``engine``; this only keeps the
+    asyncio loop alive so the process stays resident and processes real
+    events (voice, UI, pulse, cognition) until an explicit shutdown signal
+    (Ctrl-C / SIGINT / SIGTERM, or a set ``shutdown_event``) arrives.
+
+    Fully event-driven: zero idle CPU while waiting. The completion of a
+    developmental cycle is ONE operation inside the runtime and must never
+    terminate it — this wait is what keeps the runtime alive after the
+    initial cycle and scoreboard (spec §3, §10, §15).
+    """
+    loop = asyncio.get_running_loop()
+    # Install the shutdown handlers BEFORE announcing ACTIVE so there is no
+    # window in which SIGINT/SIGTERM still has its default (terminating)
+    # disposition — an operator who sees ACTIVE can always shut down cleanly.
+    installed = False
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, shutdown_event.set)
+            installed = True
+        except (NotImplementedError, RuntimeError):
+            # Non-UNIX platform or non-main-thread loop: fall back to periodic
+            # wakeups; the default KeyboardInterrupt/termination still
+            # interrupts the wait below and shuts down cleanly.
+            pass
+    print("\nZERION RUNTIME: ACTIVE")
+    print("LIFECYCLE: PERSISTENT")
+    print("STATE: WAITING_FOR_EVENTS")
+    print("Ctrl-C to shut down cleanly.")
+    try:
+        if installed:
+            await shutdown_event.wait()
+        else:
+            while not shutdown_event.is_set():
+                await asyncio.sleep(1.0)
+    except KeyboardInterrupt:
+        pass
 
 
 async def run_cli():
@@ -45,6 +89,7 @@ async def run_cli():
 
     args = parser.parse_args()
 
+    shutdown_event = asyncio.Event()
     engine = AscendantEngine(data_dir=args.data_dir)
     await engine.start()
 
@@ -129,19 +174,41 @@ async def run_cli():
             )
             print(f"Trial ID:    {trial.experiment_id}")
             print(f"Hypothesis:  {trial.hypothesis}")
-            print(f"Effect Size: {trial.effect_size:+.4f}")
+            if trial.effect_size is None:
+                print("Effect Size: UNAVAILABLE (not measured — no eval_fn "
+                      "supplied for this trial)")
+            else:
+                print(f"Effect Size: {trial.effect_size:+.4f}")
             print(f"Decision:    {trial.decision}")
             print(f"Rationale:   {trial.rationale}")
 
         elif args.benchmark:
-            print("[GENESIS X10] Executing 14-Category Benchmark Suite...")
+            print("[GENESIS X10] Executing 14-Category Benchmark Suite "
+                  "(real sandbox measurement where a harness is wired; "
+                  "other categories reported NOT_MEASURED)...")
             report = await engine.benchmarks.run_all()
             print(f"\n================ BENCHMARK REPORT: {report.run_id} ================")
-            print(f"Tasks Evaluated:              {report.total_tasks}")
-            print(f"Average Baseline Score:       {report.avg_baseline_score:.3f}")
-            print(f"Average Ascendant Score:      {report.avg_ascendant_score:.3f}")
-            print(f"Improvement Ratio:            {report.composite_improvement_ratio:.2f}x")
-            print(f"Effective Intelligence Score: {report.effective_intelligence_score:.4f}")
+            print(f"Tasks Evaluated:              {report.total_tasks} "
+                  f"({report.measured_tasks} measured, "
+                  f"{report.total_tasks - report.measured_tasks} NOT_MEASURED)")
+            if report.avg_baseline_score is None:
+                print("Average Baseline Score:       UNAVAILABLE (no measured tasks)")
+            else:
+                print(f"Average Baseline Score:       {report.avg_baseline_score:.3f}")
+            if report.avg_ascendant_score is None:
+                print("Average Ascendant Score:      UNAVAILABLE (no measured tasks)")
+            else:
+                print(f"Average Ascendant Score:      {report.avg_ascendant_score:.3f}")
+            if report.composite_improvement_ratio is None:
+                print("Improvement Ratio:            UNAVAILABLE")
+            else:
+                print(f"Improvement Ratio:            {report.composite_improvement_ratio:.2f}x")
+            if report.effective_intelligence_score is None:
+                print("Effective Intelligence Score: UNAVAILABLE "
+                      "(transfer factor not measured)")
+            else:
+                print(f"Effective Intelligence Score: "
+                      f"{report.effective_intelligence_score:.4f}")
 
         elif args.cognitive_benchmark:
             from pathlib import Path as _Path
@@ -273,6 +340,10 @@ async def run_cli():
             evidence = collect_runtime_evidence(engine)
             snap = engine.scoreboard.capture_snapshot_from_evidence(evidence, cycles_run=engine._cycle_count)
             print("\n" + engine.scoreboard.render_summary_text(snap))
+            # Lifecycle: the developmental cycle is ONE operation inside the
+            # runtime — its completion must NOT terminate Zerion. Transition
+            # to ACTIVE and keep the process resident until explicit shutdown.
+            await _enter_persistent_runtime(engine, shutdown_event)
 
     finally:
         await engine.stop()

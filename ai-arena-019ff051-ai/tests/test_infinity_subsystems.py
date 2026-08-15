@@ -146,16 +146,67 @@ class TestInfinitySubsystems(unittest.IsolatedAsyncioTestCase):
         self.assertIn(composed.strategy_id, evo._lineage)
 
     async def test_self_experimentation_engine(self):
+        """With a real eval_fn the trial measures actual scores — no fabricated
+        defaults. The evaluator here is a deterministic measurement function,
+        so control/treatment scores and the effect size are REAL outputs of
+        that function across sample_size trials."""
         self_exp = SelfExperimentationEngine(db_path=os.path.join(self.temp_dir, "self_exp.db"))
+
+        def measured_score(config):
+            # Deterministic stand-in for a benchmark harness over a real engine
+            # configuration: higher verification_ratio -> better measured score.
+            return config * 0.9
+
         report = await self_exp.run_architecture_experiment(
             hypothesis="Increasing verification improves coding success",
             target_dimension="verification_ratio",
             control_val=0.80,
             treatment_val=0.95,
-            target_phenotype="CodingPhenotype"
+            target_phenotype="CodingPhenotype",
+            eval_fn=measured_score,
+            sample_size=3,
         )
         self.assertEqual(report.decision, "ACCEPTED_FOR_PHENOTYPE")
         self.assertGreater(report.effect_size, 0.0)
+        # Scores are measured from eval_fn, not hard-coded 0.85 / +0.08.
+        self.assertAlmostEqual(report.control_score, 0.80 * 0.9, places=4)
+        self.assertAlmostEqual(report.treatment_score, 0.95 * 0.9, places=4)
+        self.assertGreaterEqual(report.sample_size, 3)
+
+    async def test_self_experimentation_without_evaluator_is_honest(self):
+        """Without an eval_fn the engine must NOT invent plausible numbers
+        (INV-001): scores are None and the decision is NOT_MEASURED."""
+        self_exp = SelfExperimentationEngine(db_path=os.path.join(self.temp_dir, "self_exp2.db"))
+        report = await self_exp.run_architecture_experiment(
+            hypothesis="Some hypothesis",
+            target_dimension="verification_ratio",
+            control_val=0.80,
+            treatment_val=0.95,
+        )
+        self.assertEqual(report.decision, "NOT_MEASURED")
+        self.assertIsNone(report.control_score)
+        self.assertIsNone(report.treatment_score)
+        self.assertIsNone(report.effect_size)
+        self.assertIsNone(report.latency_delta_ms)
+        self.assertIn("NOT measured", report.rationale)
+
+    async def test_self_experiment_rejected_when_measured_effect_negative(self):
+        """A genuinely worse treatment is rejected from measured data."""
+        self_exp = SelfExperimentationEngine(db_path=os.path.join(self.temp_dir, "self_exp3.db"))
+
+        def inverted(config):
+            return 1.0 - config
+
+        report = await self_exp.run_architecture_experiment(
+            hypothesis="Worse treatment",
+            target_dimension="risk_tolerance",
+            control_val=0.2,
+            treatment_val=0.9,
+            eval_fn=inverted,
+        )
+        self.assertEqual(report.decision, "REJECTED")
+        self.assertLess(report.effect_size, 0.0)
+        self.assertIsNotNone(report.latency_delta_ms)
 
     def test_cognitive_maturity_levels(self):
         evaluator = CognitiveMaturityEvaluator()

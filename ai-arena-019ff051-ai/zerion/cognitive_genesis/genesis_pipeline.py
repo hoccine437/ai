@@ -75,7 +75,10 @@ def execute_strategy(context):
         code = custom_code_template or default_code
         stages.append(StrategyGenesisStageResult("3_COMPILATION", True, "Compiled executable Python cognitive cell"))
 
-        # Stage 4: Static AST & Security Guardrail Analysis
+        # Stage 4: Static AST & Security Guardrail Analysis (INV-010). The
+        # AntiGamingDetector is wired here as a REAL call site: synthesized
+        # code is checked for hard-coded score patterns and trivial constant
+        # returns before it can ever be registered.
         try:
             tree = ast.parse(code)
             for node in ast.walk(tree):
@@ -89,7 +92,20 @@ def execute_strategy(context):
                             failure_stage="4_STATIC_ANALYSIS",
                             error_message=f"Invariant violation: forbidden call '{call_name}'"
                         )
-            stages.append(StrategyGenesisStageResult("4_STATIC_ANALYSIS", True, "AST static safety validation passed"))
+            from zerion.benchmarks.anti_gaming import AntiGamingDetector
+            gaming = AntiGamingDetector().audit_code_payload(code)
+            if not gaming.is_valid:
+                return SynthesizedStrategyResult(
+                    strategy=None,
+                    success=False,
+                    stages_log=stages,
+                    failure_stage="4_STATIC_ANALYSIS",
+                    error_message=("Anti-gaming violation: "
+                                   "; ".join(gaming.violations_detected))
+                )
+            stages.append(StrategyGenesisStageResult(
+                "4_STATIC_ANALYSIS", True,
+                "AST static safety + anti-gaming validation passed"))
         except Exception as e:
             return SynthesizedStrategyResult(
                 strategy=None,

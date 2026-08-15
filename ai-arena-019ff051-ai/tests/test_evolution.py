@@ -58,11 +58,44 @@ def fast_add(a, b):
         self.assertTrue(res_safe.promoted)
         self.assertFalse(res_safe.rolled_back)
 
-    async def test_ascension_cycle(self):
+    async def test_ascension_cycle_inconclusive_when_unmeasured(self):
+        """With the real (honest) benchmark runner the composite is
+        NOT_MEASURED (transfer factor unwired), so the cycle must be
+        INCONCLUSIVE — never a fabricated promotion with a base+0.04 gain."""
         asc_engine = AscensionEngine()
         report = await asc_engine.execute_ascension_cycle()
+        self.assertFalse(report.promoted)
+        self.assertFalse(report.rolled_back)
+        self.assertEqual(report.details["verdict"], "INCONCLUSIVE")
+        self.assertIsNone(report.post_cycle_intelligence)
+
+    async def test_ascension_cycle_promotes_on_measured_gain(self):
+        """When both benchmark runs return MEASURED intelligence, a real
+        improvement is promoted and a regression is rolled back — the decision
+        follows the measured comparison, never a hard-coded delta."""
+        class FakeBenchmarks:
+            def __init__(self):
+                self.calls = 0
+
+            async def run_all(self):
+                self.calls += 1
+                from zerion.benchmarks.runner import BenchmarkRunReport
+                return BenchmarkRunReport(
+                    run_id=f"fake_{self.calls}", timestamp=0.0,
+                    total_tasks=1, measured_tasks=1,
+                    avg_baseline_score=0.5,
+                    avg_ascendant_score=0.55,
+                    composite_improvement_ratio=1.1,
+                    effective_intelligence_score=(
+                        0.50 if self.calls == 1 else 0.55),
+                    task_results=[],
+                )
+
+        asc_engine = AscensionEngine(benchmark_runner=FakeBenchmarks())
+        report = await asc_engine.execute_ascension_cycle()
         self.assertTrue(report.promoted)
-        self.assertGreater(report.post_cycle_intelligence, 0.0)
+        self.assertAlmostEqual(report.post_cycle_intelligence, 0.55, places=4)
+        self.assertEqual(report.details["verdict"], "PROMOTED")
 
 
 if __name__ == "__main__":

@@ -22,11 +22,11 @@ class ArchitectureTrialReport:
     treatment_value: Any
     target_phenotype: Optional[str]
     sample_size: int
-    control_score: float
-    treatment_score: float
-    effect_size: float             # Treatment - Control
-    latency_delta_ms: float
-    decision: str                  # "ACCEPTED_FOR_PHENOTYPE", "ACCEPTED_GLOBALLY", "REJECTED"
+    control_score: Optional[float]
+    treatment_score: Optional[float]
+    effect_size: Optional[float]   # Treatment - Control (None = NOT_MEASURED)
+    latency_delta_ms: Optional[float]
+    decision: str                  # "ACCEPTED_*", "REJECTED", or "NOT_MEASURED"
     rationale: str
     timestamp: float = field(default_factory=time.time)
 
@@ -39,10 +39,14 @@ class ArchitectureTrialReport:
             "treatment_value": self.treatment_value,
             "target_phenotype": self.target_phenotype,
             "sample_size": self.sample_size,
-            "control_score": round(self.control_score, 4),
-            "treatment_score": round(self.treatment_score, 4),
-            "effect_size": round(self.effect_size, 4),
-            "latency_delta_ms": round(self.latency_delta_ms, 2),
+            "control_score": (round(self.control_score, 4)
+                               if self.control_score is not None else None),
+            "treatment_score": (round(self.treatment_score, 4)
+                                if self.treatment_score is not None else None),
+            "effect_size": (round(self.effect_size, 4)
+                            if self.effect_size is not None else None),
+            "latency_delta_ms": (round(self.latency_delta_ms, 2)
+                                 if self.latency_delta_ms is not None else None),
             "decision": self.decision,
             "rationale": self.rationale,
             "timestamp": self.timestamp
@@ -82,36 +86,77 @@ class SelfExperimentationEngine:
         target_dimension: str,
         control_val: Any,
         treatment_val: Any,
-        sample_size: int = 10,
+        sample_size: int = 3,
         target_phenotype: Optional[str] = None,
         eval_fn: Optional[Callable[[Any], float]] = None
     ) -> ArchitectureTrialReport:
-        """Executes a controlled A/B trial comparing Control vs. Treatment configuration."""
+        """Executes a controlled A/B trial comparing Control vs. Treatment
+        configuration.
+
+        Honesty contract (INV-001 / INV-003): scores are ONLY produced by the
+        provided ``eval_fn`` — a measurement function the caller must supply
+        (e.g. a benchmark harness over a real engine configuration). No
+        plausible-looking defaults are invented: if ``eval_fn`` is absent the
+        report carries ``None`` scores and decision ``NOT_MEASURED``, and no
+        effect size / latency delta / acceptance is claimed. ``sample_size``
+        is honored as the number of real trials per arm (bounded for safety)
+        and the mean is reported.
+        """
         exp_id = f"self_exp_{uuid.uuid4().hex[:8]}"
+        trials = max(1, min(int(sample_size or 1), 20))
 
-        # Evaluate Control baseline
-        control_score = 0.85
-        if eval_fn:
-            control_score = eval_fn(control_val)
+        measured_control: Optional[float] = None
+        measured_treatment: Optional[float] = None
+        latency_control: Optional[float] = None
+        latency_treatment: Optional[float] = None
 
-        # Evaluate Treatment candidate
-        treatment_score = control_score + 0.08 if treatment_val > control_val else control_score - 0.05
-        if eval_fn:
-            treatment_score = eval_fn(treatment_val)
+        if eval_fn is not None:
+            c_scores: List[float] = []
+            t_scores: List[float] = []
+            c_lats: List[float] = []
+            t_lats: List[float] = []
+            for _ in range(trials):
+                t0 = time.perf_counter()
+                c_scores.append(float(eval_fn(control_val)))
+                c_lats.append((time.perf_counter() - t0) * 1000.0)
+                t0 = time.perf_counter()
+                t_scores.append(float(eval_fn(treatment_val)))
+                t_lats.append((time.perf_counter() - t0) * 1000.0)
+            measured_control = round(sum(c_scores) / len(c_scores), 4)
+            measured_treatment = round(sum(t_scores) / len(t_scores), 4)
+            latency_control = round(sum(c_lats) / len(c_lats), 2)
+            latency_treatment = round(sum(t_lats) / len(t_lats), 2)
 
-        effect_size = treatment_score - control_score
-        latency_delta = 3.5
+        effect_size = (round(measured_treatment - measured_control, 4)
+                       if (measured_control is not None
+                           and measured_treatment is not None) else None)
+        latency_delta = (round(latency_treatment - latency_control, 2)
+                         if (latency_control is not None
+                             and latency_treatment is not None) else None)
 
-        if effect_size >= 0.05:
+        if effect_size is None:
+            decision = "NOT_MEASURED"
+            rationale = (
+                "No eval_fn supplied: control/treatment scores are NOT "
+                "measured, so no effect size, latency delta, or acceptance "
+                "decision is claimed (INV-001/INV-003).")
+        elif effect_size >= 0.05:
             if target_phenotype:
                 decision = "ACCEPTED_FOR_PHENOTYPE"
-                rationale = f"Significant positive effect (+{effect_size*100:.1f}%) localized to {target_phenotype}."
+                rationale = (f"Measured positive effect (+{effect_size*100:.1f}%) "
+                             f"across {trials} trial(s) localized to "
+                             f"{target_phenotype}.")
             else:
                 decision = "ACCEPTED_GLOBALLY"
-                rationale = f"Statistically verified global gain (+{effect_size*100:.1f}%)."
+                rationale = (f"Measured global gain (+{effect_size*100:.1f}%) "
+                             f"across {trials} trial(s).")
         else:
             decision = "REJECTED"
-            rationale = f"Insufficient effect size ({effect_size*100:.1f}%) relative to latency cost (+{latency_delta}ms)."
+            rationale = (f"Insufficient measured effect size "
+                         f"({effect_size*100:.1f}%) across {trials} trial(s)"
+                         + (f" relative to latency cost "
+                            f"(+{latency_delta}ms)." if latency_delta is not None
+                            else "."))
 
         report = ArchitectureTrialReport(
             experiment_id=exp_id,
@@ -121,8 +166,8 @@ class SelfExperimentationEngine:
             treatment_value=treatment_val,
             target_phenotype=target_phenotype,
             sample_size=sample_size,
-            control_score=control_score,
-            treatment_score=treatment_score,
+            control_score=measured_control,
+            treatment_score=measured_treatment,
             effect_size=effect_size,
             latency_delta_ms=latency_delta,
             decision=decision,

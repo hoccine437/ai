@@ -10,7 +10,10 @@ from zerion.experiments.sandbox import ExecutionSandbox
 
 
 class BaselineResult:
-    def __init__(self, architecture: str, task_id: str, success: bool, score: float, latency_ms: float, cost_cents: float, details: Dict[str, Any]):
+    def __init__(self, architecture: str, task_id: str,
+                 success: Optional[bool], score: Optional[float],
+                 latency_ms: Optional[float], cost_cents: Optional[float],
+                 details: Dict[str, Any]):
         self.architecture = architecture
         self.task_id = task_id
         self.success = success
@@ -24,8 +27,9 @@ class BaselineResult:
             "architecture": self.architecture,
             "task_id": self.task_id,
             "success": self.success,
-            "score": round(self.score, 4),
-            "latency_ms": round(self.latency_ms, 2),
+            "score": (round(self.score, 4) if self.score is not None else None),
+            "latency_ms": (round(self.latency_ms, 2)
+                            if self.latency_ms is not None else None),
             "cost_cents": self.cost_cents,
             "details": self.details
         }
@@ -48,7 +52,7 @@ class ScriptedBaseline:
 
         score = 0.0
         success = False
-        details = {}
+        details = {"category": category}
 
         if category == "reasoning":
             # Simple keyword / direct match on first relation
@@ -57,7 +61,8 @@ class ScriptedBaseline:
             if chain and len(chain) > 0:
                 score = 0.35
                 success = False
-                details = {"reason": "Scripted heuristic lacks multi-hop causal inference"}
+                details = {"category": category,
+                           "reason": "Scripted heuristic lacks multi-hop causal inference"}
 
         elif category == "coding":
             # Static template matching without verification
@@ -65,7 +70,7 @@ class ScriptedBaseline:
             sb = await self.sandbox.run_python_code(code, timeout_seconds=2.0)
             score = 0.40 if sb.success else 0.10
             success = sb.success
-            details = {"stdout": sb.stdout}
+            details = {"category": category, "stdout": sb.stdout}
 
         elif category == "debugging":
             # Fixed syntax replacement, no root cause diagnosis
@@ -75,7 +80,8 @@ class ScriptedBaseline:
             sb = await self.sandbox.run_python_code(fixed + "\n" + inputs.get("test_harness", ""), timeout_seconds=2.0)
             score = 0.45 if sb.success else 0.20
             success = sb.success
-            details = {"fixed_by_blind_regex": success}
+            details = {"category": category,
+                       "fixed_by_blind_regex": success}
 
         elif category == "research" or category == "anomaly_detection" or category == "problem_discovery":
             # Static threshold check
@@ -84,7 +90,8 @@ class ScriptedBaseline:
             detected = val > thresh
             score = 0.40 if detected else 0.20
             success = detected
-            details = {"detected_via_static_threshold": detected}
+            details = {"category": category,
+                       "detected_via_static_threshold": detected}
 
         elif category == "planning" or category == "long_horizon":
             # Linear sequential execution, fails if any step crashes (no checkpointing)
@@ -94,16 +101,19 @@ class ScriptedBaseline:
             if has_interrupt:
                 score = 0.10
                 success = False
-                details = {"reason": "Scripted baseline crashed and has no checkpoint recovery"}
+                details = {"category": category,
+                           "reason": "Scripted baseline crashed and has no checkpoint recovery"}
             else:
                 score = 0.60
                 success = True
-                details = {"completed_steps": len(steps)}
+                details = {"category": category,
+                           "completed_steps": len(steps)}
 
         else:
             score = 0.30
             success = False
-            details = {"reason": "Scripted rule not defined for category"}
+            details = {"category": category,
+                       "reason": "Scripted rule not defined for category"}
 
         latency = (time.perf_counter() - t0) * 1000.0
         return BaselineResult(
@@ -135,7 +145,7 @@ class LinearReactAgent:
 
         score = 0.0
         success = False
-        details = {}
+        details = {"category": category}
 
         # 1-3 tool execution iterations
         if category == "coding" or category == "debugging":
@@ -145,10 +155,12 @@ class LinearReactAgent:
                 sb = await self.sandbox.run_python_code(f"{proposed_solution}\n{test_harness}", timeout_seconds=3.0)
                 success = sb.success and "TESTS_PASSED" in sb.stdout
                 score = 0.70 if success else 0.35
-                details = {"sandbox_success": sb.success, "stdout": sb.stdout}
+                details = {"category": category,
+                           "sandbox_success": sb.success, "stdout": sb.stdout}
             else:
                 score = 0.40
-                details = {"reason": "ReAct agent could not synthesize unassisted patch"}
+                details = {"category": category,
+                           "reason": "ReAct agent could not synthesize unassisted patch"}
 
         elif category == "reasoning" or category == "diagnosis":
             # Multi-step text reasoning without adversarial check
@@ -157,11 +169,12 @@ class LinearReactAgent:
             if len(chain) <= 3:
                 score = 0.65
                 success = True
-                details = {"hops_resolved": len(chain)}
+                details = {"category": category, "hops_resolved": len(chain)}
             else:
                 score = 0.45
                 success = False
-                details = {"reason": "Context drift on long causal chain"}
+                details = {"category": category,
+                           "reason": "Context drift on long causal chain"}
 
         elif category == "problem_discovery" or category == "anomaly_detection":
             # Reactive only - fails to detect latent issues without explicit prompt
@@ -169,11 +182,13 @@ class LinearReactAgent:
             if is_prompted:
                 score = 0.60
                 success = True
-                details = {"detected": True, "mode": "reactive_prompted"}
+                details = {"category": category, "detected": True,
+                           "mode": "reactive_prompted"}
             else:
                 score = 0.15
                 success = False
-                details = {"detected": False, "mode": "unprompted_miss"}
+                details = {"category": category, "detected": False,
+                           "mode": "unprompted_miss"}
 
         elif category == "long_horizon":
             # Stateful across steps, but loses memory on crash
@@ -181,22 +196,26 @@ class LinearReactAgent:
             if has_interrupt:
                 score = 0.30
                 success = False
-                details = {"failed_at_step": inputs.get("crash_step", 2), "reason": "No durable checkpoint recovery"}
+                details = {"category": category,
+                           "failed_at_step": inputs.get("crash_step", 2),
+                           "reason": "No durable checkpoint recovery"}
             else:
                 score = 0.75
                 success = True
-                details = {"completed": True}
+                details = {"category": category, "completed": True}
 
         elif category == "learning" or category == "transfer":
             # ReAct agent does not persist procedural skills across session resets
             score = 0.35
             success = False
-            details = {"reason": "No procedural distillation or strategy transfer mechanism"}
+            details = {"category": category,
+                       "reason": "No procedural distillation or strategy transfer mechanism"}
 
         else:
             score = 0.50
             success = True
-            details = {"general_step_executed": True}
+            details = {"category": category,
+                       "general_step_executed": True}
 
         latency = (time.perf_counter() - t0) * 1000.0 + 25.0  # realistic ReAct tool latency
         return BaselineResult(
@@ -262,5 +281,8 @@ class AblatedAscendant:
             score=score,
             latency_ms=latency,
             cost_cents=0.008,
-            details={"ablations": ["no_episodic_memory", "no_procedural_distillation", "no_capability_birth"]}
+            details={"category": category,
+                     "ablations": ["no_episodic_memory",
+                                   "no_procedural_distillation",
+                                   "no_capability_birth"]}
         )

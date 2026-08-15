@@ -104,7 +104,9 @@ class DevelopmentalScoreboard:
             brier = Metric(
                 name="brier_score", value=evidence.brier_score,
                 status=MeasurementStatus.CALCULATED_FROM_OBSERVED_DATA,
-                sample_count=1, evidence=["self_model.calibrator.calculate_brier_score()"],
+                sample_count=max(1, evidence.brier_samples),
+                evidence=["self_model.calibrator.calculate_brier_score() "
+                          f"over {evidence.brier_samples} recorded predictions"],
             )
         else:
             brier = Metric.unavailable("brier_score", "calibrator has no recorded predictions yet")

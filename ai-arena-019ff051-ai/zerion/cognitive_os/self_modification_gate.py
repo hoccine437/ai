@@ -367,7 +367,32 @@ class SelfModificationGate:
 
     def approve(self, proposal: ImprovementProposal,
                 approval: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
-        # Security boundary first: SELF_MODIFICATION/SYSTEM_MUTATE is a
+        # INV-001..INV-010 are enforced here as a real call site: the
+        # immutable invariant root gate rejects proposals that would present
+        # unverified claims as facts, bypass evaluator isolation, or fabricate
+        # memory provenance. Denials carry the exact invariant id.
+        try:
+            from zerion.identity.invariants import check_invariants
+            # proposed_change may be a code string (CODE_CHANGE) or a config
+            # dict; only dict payloads can carry invariant-flag fields.
+            proposed = (proposal.proposed_change
+                        if isinstance(proposal.proposed_change, dict) else {})
+            payload: Dict[str, Any] = {
+                "unverified_claim_as_fact": bool(
+                    (proposal.analysis or {}).get("claims_measured") is False),
+                "manipulate_memory_provenance": bool(
+                    proposal.modification_type == ModificationType.MEMORY_POLICY_CHANGE
+                    and proposed.get("rewrite_provenance")),
+                "bypass_evaluator_isolation": bool(
+                    proposed.get("modify_benchmark_evaluator")),
+            }
+            ok, reason = check_invariants("self_modification", payload)
+            if not ok:
+                return False, reason
+        except Exception:  # noqa: BLE001 — invariant gate failure must deny
+            return False, "invariant gate unavailable: self-modification denied"
+
+        # Security boundary next: SELF_MODIFICATION/SYSTEM_MUTATE is a
         # high-risk permission that is never held by default. If a boundary is
         # wired, it MUST authorize the operation or the gate refuses — policy
         # checks below never run for an unauthorized change.

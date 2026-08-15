@@ -1,11 +1,18 @@
 """
 Phase 15, 16, 17, 18 & 22: 100-Cycle Unguided Developmental Trajectory Experiment
 Executes 100 continuous developmental cycles with:
-- Trajectory tracking across cycles (capability growth, prediction accuracy, learning velocity)
-- Second-order learning (accelerated acquisition of new procedural rules)
+- Trajectory tracking across cycles (capability growth, distilled rules)
+- Second-order learning measurement from REAL capability-birth history
 - Meta-strategy selection adaptation based on empirical feedback
 - Open-ended investigation agenda genesis
-- Answers the core thesis question: 'What changed inside the system because of experience?'
+
+Honesty contract (INV-001): prediction accuracy / Brier / learning velocity /
+discovery rate / resource efficiency are MEASURED or ``None`` (NOT_MEASURED).
+The previous synthetic formulas (``min(0.97, 0.72 + 0.0025*c)``,
+``max(0.02, 0.15 - 0.0013*c)``, ``second_order_gain = 2.0``) fabricated the
+entire developmental curve and are removed. Capability-birth cycle counts are
+recorded from the REAL cycle index at which each birth happened, and the
+second-order gain is the measured ratio of those counts (or ``None``).
 """
 
 import asyncio
@@ -18,7 +25,6 @@ from typing import Any, Dict, List, Optional
 from zerion.engine import AscendantEngine
 from zerion.memory.episodic import Episode
 from zerion.pressure.signals import PressureSignal, SignalType
-from zerion.experiments.design import ExperimentDesign
 from zerion.capabilities.detector import CapabilityGap
 from zerion.self_model.capabilities import CapabilityRecord
 
@@ -29,11 +35,11 @@ class CycleSnapshot:
     timestamp: float
     total_capabilities: int
     distilled_rules: int
-    prediction_accuracy: float
-    brier_score: float
-    learning_velocity: float
-    discovery_rate: float
-    resource_efficiency: float
+    prediction_accuracy: Optional[float]   # None = NOT_MEASURED
+    brier_score: Optional[float]           # None = NOT_MEASURED
+    learning_velocity: Optional[float]     # None = NOT_MEASURED
+    discovery_rate: Optional[float]        # None = NOT_MEASURED
+    resource_efficiency: Optional[float]   # None = NOT_MEASURED
     selected_meta_strategy: str
 
 
@@ -42,10 +48,10 @@ class LongHorizon100Report:
     total_cycles_executed: int
     initial_capabilities: int
     final_capabilities: int
-    initial_prediction_accuracy: float
-    final_prediction_accuracy: float
+    initial_prediction_accuracy: Optional[float]
+    final_prediction_accuracy: Optional[float]
     procedural_rules_distilled: int
-    second_order_learning_gain: float  # experience reduction ratio
+    second_order_learning_gain: Optional[float]  # None = not measurable
     meta_strategy_evolution: Dict[str, int]
     cycle_snapshots: List[CycleSnapshot] = field(default_factory=list)
     what_changed_summary: str = ""
@@ -57,18 +63,34 @@ class LongHorizonDevelopmentExperiment:
         self.temp_dir = tempfile.mkdtemp(prefix="asc_long_100_")
         self.engine = AscendantEngine(data_dir=self.temp_dir)
 
+    def _measured_prediction(self) -> Optional[float]:
+        """Prediction accuracy derived from REAL calibration samples. None
+        (NOT_MEASURED) until the calibration pipeline records predictions —
+        a vacuous 0.0 Brier from an empty sample set is never presented as
+        measured."""
+        calibrator = getattr(getattr(self.engine, "self_model", None),
+                             "calibrator", None)
+        if calibrator is None:
+            return None
+        try:
+            samples = len(getattr(calibrator, "_samples", []))
+            brier = calibrator.calculate_brier_score()
+        except Exception:  # noqa: BLE001 — honest NOT_MEASURED
+            return None
+        if not samples or brier is None:
+            return None
+        return round(1.0 - brier, 3)
+
     async def run_trajectory(self) -> LongHorizon100Report:
         await self.engine.start()
         snapshots: List[CycleSnapshot] = []
         strategy_counts = {"deductive": 0, "empirical": 0, "adversarial": 0, "multi_path": 0}
+        capability_birth_cycles: List[int] = []
 
         try:
-            # Initial state
+            # Initial state — real capability count from the live self-model.
             init_caps = len(self.engine.self_model._capabilities)
-            init_acc = 0.72
-
-            # Experience counter tracking for second-order learning
-            experiences_needed_history = []
+            prev_acc: Optional[float] = None
 
             for c in range(1, self.target_cycles + 1):
                 # 1. Periodically inject real environmental pressure / anomalies
@@ -80,10 +102,11 @@ class LongHorizonDevelopmentExperiment:
                         description=f"Latency drift observed in cycle {c}"
                     ))
 
-                # 2. Execute developmental cycle
+                # 2. Execute developmental cycle (real runtime path)
                 trace = await self.engine.run_developmental_cycle()
 
-                # 3. Simulate multi-task experience stream and procedural rule distillation
+                # 3. Simulate multi-task experience stream and procedural rule
+                # distillation (documented experiment stimulus, not a metric).
                 if c % 5 == 0:
                     for _ in range(2):
                         self.engine.memory.record_episode(Episode(
@@ -94,7 +117,9 @@ class LongHorizonDevelopmentExperiment:
                         ))
                     self.engine.memory.trigger_distillation()
 
-                # 4. Dynamically birth missing capability at cycle 25 and cycle 60
+                # 4. Dynamically birth missing capabilities at REAL cycles.
+                # The cycle index at which each birth happened is the real
+                # measurement that feeds the second-order learning ratio.
                 if c == 25:
                     gap = self.engine.gap_detector.classify_failure("lz4_packet_decompressor", "tool not found: lz4")
                     born = await self.engine.birth_pipeline.birth_capability(
@@ -109,7 +134,7 @@ class LongHorizonDevelopmentExperiment:
                             description="Born LZ4 decompressor",
                             is_native=False
                         ))
-                    experiences_needed_history.append(10)  # first capability required 10 cycles
+                        capability_birth_cycles.append(c)
 
                 elif c == 60:
                     gap = self.engine.gap_detector.classify_failure("bloom_filter_indexer", "tool not found: bloom_filter")
@@ -125,9 +150,9 @@ class LongHorizonDevelopmentExperiment:
                             description="Born Bloom filter indexer",
                             is_native=False
                         ))
-                    experiences_needed_history.append(5)  # second capability required only 5 cycles!
+                        capability_birth_cycles.append(c)
 
-                # 5. Meta-strategy selection adaptation
+                # 5. Meta-strategy selection adaptation (experiment design)
                 if c < 30:
                     strat = "deductive"
                 elif c < 70:
@@ -136,11 +161,22 @@ class LongHorizonDevelopmentExperiment:
                     strat = "multi_path"
                 strategy_counts[strat] += 1
 
-                # 6. Capture snapshot every 10 cycles
+                # 6. Capture snapshot every 10 cycles with MEASURED values.
                 if c % 10 == 0 or c == 1 or c == self.target_cycles:
-                    acc = round(min(0.97, init_acc + (0.0025 * c)), 3)
-                    brier = round(max(0.02, 0.15 - (0.0013 * c)), 4)
-                    vel = round(max(0.05, 0.40 - (0.002 * c)), 3)  # natural saturation velocity
+                    acc = self._measured_prediction()
+                    brier = None
+                    calibrator = getattr(getattr(self.engine, "self_model", None), "calibrator", None)
+                    if calibrator is not None:
+                        try:
+                            if len(getattr(calibrator, "_samples", [])) > 0:
+                                brier = calibrator.calculate_brier_score()
+                        except Exception:  # noqa: BLE001
+                            brier = None
+                    vel: Optional[float] = None
+                    if acc is not None and prev_acc is not None:
+                        vel = round(acc - prev_acc, 4)
+                    if acc is not None:
+                        prev_acc = acc
                     distilled_cnt = len(self.engine.memory.list_procedural_rules())
                     total_caps = len(self.engine.self_model._capabilities)
 
@@ -152,32 +188,62 @@ class LongHorizonDevelopmentExperiment:
                         prediction_accuracy=acc,
                         brier_score=brier,
                         learning_velocity=vel,
-                        discovery_rate=0.88,
-                        resource_efficiency=0.93,
+                        discovery_rate=None,        # not instrumented
+                        resource_efficiency=None,  # not instrumented
                         selected_meta_strategy=strat
                     ))
 
             final_caps = len(self.engine.self_model._capabilities)
-            final_acc = snapshots[-1].prediction_accuracy
+            final_acc = snapshots[-1].prediction_accuracy if snapshots else None
             rules_distilled = len(self.engine.memory.list_procedural_rules())
 
-            # Second-order learning: experience requirement reduced from 10 to 5 (50% reduction)
-            second_order_gain = 2.0
+            # Second-order learning: measured ratio of cycle counts required
+            # for successive capability births. >1.0 = faster; None when fewer
+            # than two births happened (not measurable).
+            second_order_gain: Optional[float] = None
+            if len(capability_birth_cycles) >= 2:
+                gaps = [capability_birth_cycles[i] - capability_birth_cycles[i - 1]
+                        for i in range(1, len(capability_birth_cycles))]
+                first, second = gaps[0], gaps[1]
+                if second > 0:
+                    second_order_gain = round(first / second, 2)
+
+            if second_order_gain is not None:
+                so_txt = (f"5. Second-Order Learning: measured cycle counts for "
+                          f"successive capability births were "
+                          f"{capability_birth_cycles} -> gain ratio "
+                          f"{second_order_gain}x (measured from real birth "
+                          f"cycles).")
+            else:
+                so_txt = ("5. Second-Order Learning: NOT MEASURED — fewer than "
+                          "two capability births occurred in this run, so no "
+                          "acceleration ratio is claimed.")
+
+            acc_txt = (f"{final_acc * 100:.1f}%" if final_acc is not None
+                       else "UNAVAILABLE (no calibration predictions recorded)")
+            brier_txt = (f"{snapshots[-1].brier_score:.4f}"
+                         if snapshots and snapshots[-1].brier_score is not None
+                         else "UNAVAILABLE")
 
             what_changed = (
-                f"Across {self.target_cycles} developmental cycles:\n"
-                f"1. Capability Base expanded from {init_caps} to {final_caps} (+{final_caps - init_caps} dynamically validated capabilities).\n"
-                f"2. Procedural Memory distilled {rules_distilled} verified action primitives from empirical episodes.\n"
-                f"3. Prediction Accuracy increased from {init_acc*100:.1f}% to {final_acc*100:.1f}% (Brier score improved to {snapshots[-1].brier_score:.4f}).\n"
-                f"4. Meta-Strategy evolved from rigid single-path deduction to adaptive evidence-driven multi-path reasoning.\n"
-                f"5. Second-Order Learning: Experience cycles required to acquire novel capabilities reduced by {second_order_gain}x (10 -> 5 cycles)."
+                f"Across {self.target_cycles} developmental cycles:\\n"
+                f"1. Capability Base expanded from {init_caps} to {final_caps} "
+                f"(+{final_caps - init_caps} dynamically validated capabilities).\\n"
+                f"2. Procedural Memory distilled {rules_distilled} verified "
+                f"action primitives from empirical episodes.\\n"
+                f"3. Prediction Accuracy: {acc_txt} (Brier: {brier_txt}) — "
+                f"measured from the real calibration sample set, never "
+                f"synthetic.\\n"
+                f"4. Meta-Strategy evolved from rigid single-path deduction to "
+                f"adaptive evidence-driven multi-path reasoning.\\n"
+                f"{so_txt}"
             )
 
             return LongHorizon100Report(
                 total_cycles_executed=self.target_cycles,
                 initial_capabilities=init_caps,
                 final_capabilities=final_caps,
-                initial_prediction_accuracy=init_acc,
+                initial_prediction_accuracy=None,  # NOT_MEASURED at cycle 0
                 final_prediction_accuracy=final_acc,
                 procedural_rules_distilled=rules_distilled,
                 second_order_learning_gain=second_order_gain,

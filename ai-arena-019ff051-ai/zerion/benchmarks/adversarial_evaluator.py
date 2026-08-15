@@ -29,6 +29,7 @@ class ArchitectureComparativeScore:
     mean_score: float
     mean_latency_ms: float
     total_cost_cents: float
+    measured_tasks: int = 0
     score_by_category: Dict[str, float] = field(default_factory=dict)
 
 
@@ -81,16 +82,35 @@ class AdversarialEvaluator:
         finally:
             await self.engine.stop()
 
-        # Aggregate metrics
-        scores_scripted = self._compute_summary("ScriptedBaseline", results_scripted)
-        scores_react = self._compute_summary("LinearReActAgent", results_react)
-        scores_ablated = self._compute_summary("AblatedAscendant_NoDevMemory", results_ablated)
-        scores_full = self._compute_summary("FullAscendant", results_full)
+        # Honesty: Full ASCENDANT is only measured on categories with a real
+        # executable harness. The comparative summaries are restricted to that
+        # same category subset so heuristic scores for unwired categories can
+        # never contaminate the comparison.
+        measured_cats = {r.details.get("category") for r in results_full
+                         if r.score is not None}
+        measured_cats.discard(None)
 
-        ratio_vs_script = round(scores_full.mean_score / max(0.01, scores_scripted.mean_score), 2)
-        ratio_vs_react = round(scores_full.mean_score / max(0.01, scores_react.mean_score), 2)
-        ratio_vs_ablated = round(scores_full.mean_score / max(0.01, scores_ablated.mean_score), 2)
-        learning_contrib = round(scores_full.mean_score - scores_ablated.mean_score, 4)
+        scores_scripted = self._compute_summary("ScriptedBaseline",
+                                                results_scripted, measured_cats)
+        scores_react = self._compute_summary("LinearReActAgent",
+                                             results_react, measured_cats)
+        scores_ablated = self._compute_summary("AblatedAscendant_NoDevMemory",
+                                               results_ablated, measured_cats)
+        scores_full = self._compute_summary("FullAscendant", results_full,
+                                            measured_cats)
+
+        ratio_vs_script = (round(scores_full.mean_score / max(0.01, scores_scripted.mean_score), 2)
+                           if scores_full.measured_tasks > 0 and scores_scripted.measured_tasks > 0
+                           else None)
+        ratio_vs_react = (round(scores_full.mean_score / max(0.01, scores_react.mean_score), 2)
+                          if scores_full.measured_tasks > 0 and scores_react.measured_tasks > 0
+                          else None)
+        ratio_vs_ablated = (round(scores_full.mean_score / max(0.01, scores_ablated.mean_score), 2)
+                            if scores_full.measured_tasks > 0 and scores_ablated.measured_tasks > 0
+                            else None)
+        learning_contrib = (round(scores_full.mean_score - scores_ablated.mean_score, 4)
+                            if scores_full.measured_tasks > 0 and scores_ablated.measured_tasks > 0
+                            else None)
 
         return AdversarialEvaluationReport(
             timestamp=time.time(),
@@ -113,62 +133,79 @@ class AdversarialEvaluator:
         task_id = task.get("task_id", "")
         inputs = task.get("input_data", {})
 
-        # Full ASCENDANT utilizes Cognitive Compiler, Sandbox, Memory, and Verification
+        # Honesty contract: only categories with a REAL executable harness are
+        # scored. No hard-coded 0.94/0.98/0.92/0.96/0.90 "mechanistic" scores
+        # — those were fabricated measurements (INV-001).
         if cat in ("coding", "debugging", "tool_use"):
             code = inputs.get("proposed_solution", "")
             harness = inputs.get("test_harness", "")
-            # Execute sandbox verification
-            sb = await self.engine.sandbox.run_python_code(f"{code}\n{harness}", timeout_seconds=3.0)
+            if not code or not harness:
+                return self._unmeasured_result(task, "task lacks harness")
+            # Execute sandbox verification — score is the real pass/fail.
+            sb = await self.engine.sandbox.run_python_code(
+                f"{code}\n{harness}", timeout_seconds=3.0)
             success = sb.success and "TESTS_PASSED" in sb.stdout
-            score = 0.96 if success else 0.40
+            latency = (time.perf_counter() - t0) * 1000.0
+            return BaselineResult(
+                architecture="FullAscendant",
+                task_id=task_id,
+                success=success,
+                score=1.0 if success else 0.0,
+                latency_ms=latency,
+                cost_cents=0.0,
+                details={"developmental_learning_active": True,
+                         "measurement_status": "MEASURED",
+                         "category": cat,
+                         "sandbox_ok": sb.success,
+                         "stderr": sb.stderr[:200]},
+            )
 
-        elif cat in ("problem_discovery", "anomaly_detection"):
-            # Pressure field detects unprompted latent anomaly
-            score = 0.94
-            success = True
+        return self._unmeasured_result(
+            task, "no executable harness wired for this category")
 
-        elif cat in ("long_horizon",):
-            # Mission checkpoints ensure full recovery
-            score = 0.98
-            success = True
-
-        elif cat in ("learning", "transfer", "generalization"):
-            # Full developmental memory and distillation active
-            score = 0.92
-            success = True
-
-        elif cat in ("verification", "self_correction"):
-            # Adversarial engine detects invariant contradictions
-            score = 0.96
-            success = True
-
-        else:
-            score = 0.90
-            success = True
-
-        latency = (time.perf_counter() - t0) * 1000.0 + 8.0
+    @staticmethod
+    def _unmeasured_result(task: Dict[str, Any], reason: str) -> BaselineResult:
         return BaselineResult(
             architecture="FullAscendant",
-            task_id=task_id,
-            success=success,
-            score=score,
-            latency_ms=latency,
-            cost_cents=0.005,
-            details={"developmental_learning_active": True}
+            task_id=task.get("task_id", ""),
+            success=None,
+            score=None,
+            latency_ms=None,
+            cost_cents=None,
+            details={"measurement_status": "NOT_MEASURED",
+                     "reason": reason,
+                     "category": task.get("category", "")},
         )
 
-    def _compute_summary(self, name: str, results: List[BaselineResult]) -> ArchitectureComparativeScore:
-        if not results:
-            return ArchitectureComparativeScore(name, 0, 0.0, 0.0, 0.0, 0.0)
-        mean_score = sum(r.score for r in results) / len(results)
-        succ_rate = sum(1.0 for r in results if r.success) / len(results)
-        mean_lat = sum(r.latency_ms for r in results) / len(results)
-        total_cost = sum(r.cost_cents for r in results)
+    def _compute_summary(self, name: str, results: List[BaselineResult],
+                         measured_cats: set) -> ArchitectureComparativeScore:
+        """Summarize only results whose category is in ``measured_cats`` (the
+        categories Full ASCENDANT actually measured) so heuristic scores for
+        unwired categories never enter the comparison. Baselines never return
+        None, so the filter keeps the comparison apples-to-apples."""
+        selected = [r for r in results
+                    if (r.score is not None
+                        and r.details.get("category") in measured_cats)]
+        if not selected:
+            return ArchitectureComparativeScore(name, 0, 0.0, 0.0, 0.0, 0.0,
+                                                score_by_category={})
+        mean_score = sum(r.score for r in selected) / len(selected)
+        succ_rate = (sum(1.0 for r in selected if r.success)
+                     / len(selected))
+        mean_lat = sum(r.latency_ms for r in selected) / len(selected)
+        total_cost = sum(r.cost_cents for r in selected)
+        by_cat: Dict[str, float] = {}
+        for r in selected:
+            cat = r.details.get("category")
+            if cat is not None:
+                by_cat[cat] = r.score
         return ArchitectureComparativeScore(
             architecture_name=name,
-            total_tasks=len(results),
+            total_tasks=len(selected),
+            measured_tasks=len(selected),
             success_rate=round(succ_rate, 4),
             mean_score=round(mean_score, 4),
             mean_latency_ms=round(mean_lat, 2),
-            total_cost_cents=round(total_cost, 4)
+            total_cost_cents=round(total_cost, 4),
+            score_by_category=by_cat
         )
