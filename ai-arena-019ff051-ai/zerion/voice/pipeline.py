@@ -240,7 +240,11 @@ class VoiceFirstInteractionPipeline:
         turn_id = f"v_turn_{int(time.time() * 1000) % 100000}"
 
         await self._publish(EventType.VOICE_TRANSCRIPT_FINAL, {
+            "type": "VOICE_TRANSCRIPT_FINAL",
             "transcript": speech_transcript[:500],
+            "text": speech_transcript[:500],
+            "timestamp": time.time(),
+            "source": "local_stt",
             "voice_state": self.state_machine.state.value,
         })
 

@@ -904,7 +904,18 @@ def profile_mobile_io_latency_and_throughput(payload):
         try:
             stt = self.voice_env.detect_stt().to_dict()
             if stt.get("status") == "AVAILABLE":
-                stt["display_status"] = "READY"
+                # READY means a real speech-recognition probe succeeded — an
+                # actual transcript landed in the voice perception service.
+                # Probing the mic at startup would grab the device and is not
+                # safe, so until the first real utterance the honest state is
+                # AVAILABLE — NOT PROBED (never a false READY).
+                stt["display_status"] = "AVAILABLE — NOT PROBED"
+                try:
+                    if getattr(self.voice_perception,
+                               "_stt_success_count", 0) > 0:
+                        stt["display_status"] = "READY"
+                except Exception:  # noqa: BLE001
+                    pass
             else:
                 stt["display_status"] = stt.get("status")
             # Real model state from models/stt/ discovery (never assumed).

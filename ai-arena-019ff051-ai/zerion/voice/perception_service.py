@@ -163,6 +163,10 @@ class VoicePerceptionService:
         self._mic_available = False
         self._mic_reason = ""
         self._mic_simulated = False
+        # True when the Termux primary path is active: termux-speech-to-text
+        # owns the microphone (it records from the device mic itself), so the
+        # frame monitor is NOT started and the listener loop below IS the mic.
+        self._termux_listener_mode = False
         self._segment_active = False
         self._segment_start: Optional[float] = None
         self._processing = False
@@ -170,6 +174,7 @@ class VoicePerceptionService:
         self._monitor_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
         self._consumer_task: Optional[asyncio.Task] = None
+        self._listener_task: Optional[asyncio.Task] = None
 
         self._last_activity = 0.0
         self._conversation_started_at: Optional[float] = None
@@ -187,6 +192,9 @@ class VoicePerceptionService:
         self._mic_recovery_attempts = 0
         self._stt_status = "UNKNOWN"
         self._stt_provider: Optional[str] = None
+        # Real successful transcriptions — the ONLY evidence that promotes an
+        # AVAILABLE engine to READY (a probe that actually produced text).
+        self._stt_success_count = 0
         self._started_at = 0.0
         self._cpu_start = 0.0
 
@@ -221,19 +229,55 @@ class VoicePerceptionService:
         self._consumer_task = asyncio.create_task(self._frame_consumer())
         self._watchdog_task = asyncio.create_task(self._watchdog_loop())
 
-        ok = await self._initialize_microphone()
-
-        # STT status from the REAL environment (honest detection). An injected
-        # transcriber (test/demo harness) counts as available but is always
-        # labeled ``injected_stt`` so a simulation is never mistaken for a
-        # real engine.
         stt_info = self.voice_env.detect_stt()
-        self._stt_status = stt_info.status
-        self._stt_provider = stt_info.name if stt_info.status == "AVAILABLE" \
-            else None
-        if self._stt_transcriber is not None:
+        termux_direct = (
+            stt_info.status == VoiceEngineStatus.AVAILABLE
+            and stt_info.name == "termux-speech-to-text"
+            and bool(stt_info.engine_binary))
+        if termux_direct:
+            # TERMUX PRIMARY PATH. termux-speech-to-text records from the
+            # device mic itself and returns a transcript (its own
+            # endpointing). The continuous frame monitor is deliberately NOT
+            # started: a second mic consumer (termux-microphone-record) would
+            # contend for the audio device and break capture — that is the
+            # exact reason speech produced nothing. The listener loop below
+            # IS the microphone: it drives capture+transcription sessions
+            # continuously, so LISTENING means the session loop is resident
+            # (the honest Termux meaning of listening).
+            self._termux_listener_mode = True
+            self._mic_available = True
+            self._mic_reason = ""
+            self._mic_simulated = False
             self._stt_status = VoiceEngineStatus.AVAILABLE
-            self._stt_provider = "injected_stt"
+            self._stt_provider = ("injected_stt"
+                                  if self._stt_transcriber is not None
+                                  else stt_info.name)
+            self._phase = MicPhase.LISTENING
+            self._last_activity = self._now()
+            self.watchdog.beat("mic_capture")
+            self.watchdog.beat("audio_capture")
+            await self._publish(EventType.VOICE_MIC_ACTIVE, {
+                "device": "termux-speech-to-text (STT session owns the mic)",
+                "simulated": False,
+                "monitor": {"kind": "termux_stt_session",
+                             "available": True, "simulated": False,
+                             "platform": "TERMUX"},
+            }, priority=80)
+            self._listener_task = asyncio.create_task(
+                self._termux_stt_listener_loop())
+            ok = True
+        else:
+            ok = await self._initialize_microphone()
+            # STT status from the REAL environment (honest detection). An
+            # injected transcriber (test/demo harness) counts as available but
+            # is always labeled ``injected_stt`` so a simulation is never
+            # mistaken for a real engine.
+            self._stt_status = stt_info.status
+            self._stt_provider = (stt_info.name
+                                  if stt_info.status == "AVAILABLE" else None)
+            if self._stt_transcriber is not None:
+                self._stt_status = VoiceEngineStatus.AVAILABLE
+                self._stt_provider = "injected_stt"
 
         return {"status": "STARTED", "mic_available": ok,
                 "phase": self._phase.value,
@@ -245,12 +289,14 @@ class VoicePerceptionService:
             return {"status": "STOPPED", "phase": "MIC_OFF"}
         self._started = False
         for task in (self._consumer_task, self._monitor_task,
-                     self._watchdog_task):
+                     self._watchdog_task, self._listener_task):
             if task is not None and not task.done():
                 task.cancel()
         if self._processing_task is not None and not self._processing_task.done():
             self._processing_task.cancel()
         self._consumer_task = self._monitor_task = self._watchdog_task = None
+        self._listener_task = None
+        self._termux_listener_mode = False
         try:
             self.monitor.stop()
         except Exception:  # noqa: BLE001
@@ -347,6 +393,72 @@ class VoicePerceptionService:
             pass
         if self._monitor_task is None or self._monitor_task.done():
             self._monitor_task = asyncio.create_task(self.monitor.run())
+
+    # ======================================================================
+    # Termux primary listener (termux-speech-to-text owns the microphone)
+    # ======================================================================
+
+    async def _termux_stt_listener_loop(self) -> None:
+        """Continuous Termux listener — the primary Android voice path.
+
+        ``termux-speech-to-text`` records from the device mic itself and
+        returns a JSON transcript (its own endpointing): one capture session
+        = one utterance. This loop stays resident forever:
+
+            LISTENING -> VOICE_STARTED -> capture/STT -> transcript
+            -> cognition/TTS (wake-gated) -> LISTENING -> ...
+
+        STT failures, timeouts, empty transcripts and silent sessions are
+        controlled: a VOICE_STT_UNAVAILABLE event is published (never a
+        fabricated transcript) and the loop returns to LISTENING. The service
+        never dies on a voice failure (mission §6, §12, §15).
+        """
+        while self._started and self._termux_listener_mode:
+            try:
+                self._phase = MicPhase.LISTENING
+                await self._publish(EventType.VOICE_STARTED, {
+                    "continuous_conversation": True,
+                    "voice_state": VoiceState.LISTENING.value,
+                    "source": "termux_stt_session",
+                }, priority=75)
+                self.watchdog.beat("mic_capture")
+                self.watchdog.beat("audio_capture")
+                stt = await self._transcribe([])
+                self.watchdog.beat("stt")
+                if stt.status != "SUCCESS":
+                    self._stt_unavailable_count += 1
+                    await self._publish(EventType.VOICE_STT_UNAVAILABLE, {
+                        "provider": stt.provider or "NO_PROVIDER",
+                        "reason": stt.reason or "STT failed",
+                        "simulated": stt.simulated,
+                    }, priority=80)
+                    # Controlled failure: report, then keep listening.
+                    self._phase = MicPhase.LISTENING
+                    await self._sleep(1.0)
+                    continue
+                transcript = (stt.transcript or "").strip()
+                if not transcript:
+                    # Empty transcript is ignored safely; keep listening.
+                    self._phase = MicPhase.LISTENING
+                    await self._sleep(0.5)
+                    continue
+                self._stt_success_count += 1
+                await self._handle_transcript(
+                    transcript, via_stt=True,
+                    stt_provider=stt.provider or "termux_speech")
+                # Wait (bounded) for the cognition/TTS turn to finish before
+                # the next capture session so TTS playback is never captured
+                # as the user's next utterance.
+                deadline = self._now() + 120.0
+                while self._started and self._processing \
+                        and self._now() < deadline:
+                    await self._sleep(0.2)
+                self._phase = MicPhase.LISTENING
+                await self._sleep(0.5)
+            except asyncio.CancelledError:
+                break
+            except Exception:  # noqa: BLE001 — the listener must never die
+                await self._sleep(1.0)
 
     # ======================================================================
     # frame plumbing (thread-safe entry: sounddevice callback etc.)
@@ -483,6 +595,9 @@ class VoicePerceptionService:
             # No transcript was produced: nothing is claimed, ever.
             self._phase = MicPhase.LISTENING
             return
+        # A real transcript landed — this is the evidence that promotes an
+        # AVAILABLE engine to READY in the readiness report.
+        self._stt_success_count += 1
         self._phase = MicPhase.TRANSCRIPT_READY
         await self._handle_transcript(stt.transcript, via_stt=True,
                                       stt_provider=stt.provider or "stt")
@@ -705,6 +820,17 @@ class VoicePerceptionService:
                                verify=self._verify_pipeline)
 
     async def _restart_mic(self) -> None:
+        if self._termux_listener_mode:
+            # Termux primary path: restart the session listener (the loop is
+            # the microphone) — never a frame monitor.
+            if self._listener_task is not None and not self._listener_task.done():
+                self._listener_task.cancel()
+                self._listener_task = None
+            self._mic_available = True
+            self._phase = MicPhase.LISTENING
+            self._listener_task = asyncio.create_task(
+                self._termux_stt_listener_loop())
+            return
         if self._monitor_task is not None and not self._monitor_task.done():
             self._monitor_task.cancel()
             self._monitor_task = None
@@ -745,6 +871,11 @@ class VoicePerceptionService:
             pass
 
     def _verify_mic(self) -> bool:
+        if self._termux_listener_mode:
+            # The listener loop (session-driven capture) is the microphone.
+            return (self._mic_available
+                    and self._listener_task is not None
+                    and not self._listener_task.done())
         return self._mic_available and self.monitor.is_active()
 
     def _verify_vad(self) -> bool:
@@ -813,7 +944,17 @@ class VoicePerceptionService:
     @property
     def is_listening(self) -> bool:
         """LISTENING is only ever true when the mic pipeline is genuinely
-        active — never assumed from a print()."""
+        active — never assumed from a print(). On the Termux primary path the
+        listener loop is the microphone; elsewhere the frame monitor must be
+        actively capturing."""
+        if self._termux_listener_mode:
+            # On the Termux path the listener loop IS the mic: only a
+            # resident, running loop counts as listening.
+            return (self._started
+                    and self._phase == MicPhase.LISTENING
+                    and self._mic_available
+                    and self._listener_task is not None
+                    and not self._listener_task.done())
         return (self._started
                 and self._phase == MicPhase.LISTENING
                 and self._mic_available
@@ -863,14 +1004,25 @@ class VoicePerceptionService:
             "listening_mode": self._mode.value,
             "in_conversation": self._mode == ListeningMode.ACTIVE_CONVERSATION,
             "independent_of_ui": True,
-            "mic": self.monitor.describe(),
+            "mic": ({"kind": "termux_stt_session", "available": True,
+                     "simulated": False, "platform": "TERMUX"}
+                    if self._termux_listener_mode
+                    else self.monitor.describe()),
             "mic_available": self._mic_available,
             "mic_reason": self._mic_reason or None,
             "simulated_mic": self._mic_simulated,
+            "listener": {
+                "mode": ("termux_stt_session" if self._termux_listener_mode
+                         else "frame_monitor"),
+                "active": (self._termux_listener_mode
+                            and self._listener_task is not None
+                            and not self._listener_task.done()),
+            },
             "stt": {
                 "status": stt_info.status,
                 "provider": self._stt_provider,
                 "reason": stt_info.reason,
+                "successful_transcriptions": self._stt_success_count,
             },
             "wake": {
                 "source": "layered_transcript_detector",
