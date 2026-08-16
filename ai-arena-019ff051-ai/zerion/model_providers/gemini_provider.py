@@ -55,36 +55,35 @@ class GeminiProvider(ModelProvider):
 
 
 class LocalGGUFProvider(ModelProvider):
-    """Real local GGUF inference (correction phase).
+    """Real local GGUF inference.
 
-    Backend chain — all lazy, the module stays pure stdlib at import time:
+    All backend machinery lives in ``zerion.cognitive_os.gguf_backend`` — the
+    provider only selects a model and delegates execution. The backend chain
+    (evidence-based, all lazy, module stays pure stdlib at import time):
 
       1. ``llama-cpp-python``  (``pip install llama-cpp-python``; desktops/servers)
       2. ``llama.cpp`` CLI     (``llama-cli`` / legacy ``main`` on PATH; Termux
          via a local llama.cpp build, per TERMUX.md)
 
     Model selection reuses the validated ``LocalModelDiscovery`` from the
-    cognitive OS (recursive scan, GGUF magic check, model_id -> path map).
-    Explicit ``model_id`` wins; otherwise the smallest valid model is chosen
-    deterministically (mobile-friendly). When no model file exists or no
-    backend can run it, the provider returns an honest
-    ``FALLBACK_RESPONSE`` that names the missing piece — never fabricated
-    model text.
+    cognitive OS (recursive scan, GGUF magic check, model_id -> absolute path
+    map). Explicit ``model_id`` wins; otherwise the smallest valid model is
+    chosen deterministically (mobile-friendly). The provider hands the REAL
+    discovered filesystem path to the backend — it never reconstructs a path
+    from a model name. When no model file exists or no backend can run it,
+    the provider returns an honest ``FALLBACK_RESPONSE`` that names the
+    missing piece — never fabricated model text.
 
     Tunables (env): ZERION_GGUF_BACKEND (auto|python|cli|none),
-    ZERION_GGUF_THREADS, ZERION_GGUF_CONTEXT, ZERION_GGUF_MAX_TOKENS,
-    ZERION_GGUF_TEMPERATURE, ZERION_GGUF_TIMEOUT_SECONDS.
+    ZERION_GGUF_CLI, ZERION_GGUF_THREADS, ZERION_GGUF_CONTEXT,
+    ZERION_GGUF_MAX_TOKENS, ZERION_GGUF_TEMPERATURE,
+    ZERION_GGUF_TIMEOUT_SECONDS.
     """
 
     BACKEND_AUTO = "auto"
     BACKEND_PYTHON = "python"
     BACKEND_CLI = "cli"
     BACKEND_NONE = "none"
-
-    # Tokens llama.cpp may emit at the end of generation; anything after the
-    # first occurrence is not model content.
-    _EOS_MARKERS = ("</s>", "<|endoftext|>", "<|im_end|>", "<|end|>",
-                    "<end_of_turn>", "<|eot_id|>", "[end of text]")
 
     def __init__(self, models_dir: str = "models", backend: str = BACKEND_AUTO):
         super().__init__("local_gguf")
@@ -93,9 +92,10 @@ class LocalGGUFProvider(ModelProvider):
         self.models_dir = Path(resolve_models_dir(models_dir))
         self.backend = backend
         self.last_error = ""
-        # Cached llama-cpp-python engine: one resident model at a time.
-        self._engine = None
-        self._engine_key: Optional[tuple] = None
+        # Backend instances are cached per requested mode (the python backend
+        # keeps one resident model). Detection hooks stay live: env changes
+        # (e.g. a backend installed mid-run) produce a fresh instance.
+        self._backend_cache: Dict[str, Any] = {}
 
     # -- backend detection (evidence-based, never assumed) -----------------
 
@@ -115,21 +115,58 @@ class LocalGGUFProvider(ModelProvider):
 
     def _find_cli(self) -> Optional[str]:
         import shutil
+        env = os.environ.get("ZERION_GGUF_CLI", "").strip()
+        if env:
+            p = Path(env).expanduser()
+            if p.is_file() and os.access(p, os.X_OK):
+                return str(p)
         for name in ("llama-cli", "main", "llama-llama-cli"):
             found = shutil.which(name)
             if found:
                 return found
         return None
 
+    def _resolve_backend(self):
+        """The concrete backend for the current requested mode (cached per
+        mode so the python backend's resident model survives across calls)."""
+        from zerion.cognitive_os.gguf_backend import LocalGGUFBackend
+        mode = self._requested_backend()
+        if mode not in self._backend_cache:
+            self._backend_cache[mode] = LocalGGUFBackend.detect(
+                requested=mode,
+                python_available=self._has_python_backend,
+                find_cli=self._find_cli)
+        return self._backend_cache[mode]
+
     def backend_info(self) -> Dict[str, Any]:
         """Evidence-based report of what inference machinery actually exists."""
-        return {
+        backend = None
+        try:
+            backend = self._resolve_backend()
+        except Exception:  # noqa: BLE001 — detection must never crash reporting
+            backend = None
+        info = {
             "mode": self._requested_backend(),
-            "python_backend": self._has_python_backend(),
-            "cli": self._find_cli(),
             "models_dir": str(self.models_dir),
             "model_available": self.is_available(),
+            "name": "NONE",
+            "available": False,
+            "install_hint": None,
         }
+        if backend is None:
+            info["python_backend"] = False
+            info["cli"] = None
+            info["install_hint"] = "local GGUF inference disabled " \
+                                   "(ZERION_GGUF_BACKEND=none)"
+            return info
+        info["python_backend"] = bool(backend.kind == "python")
+        info["cli"] = getattr(backend, "cli_path", None) \
+            if backend.kind == "cli" else None
+        info["name"] = backend.display_name
+        info["available"] = bool(backend.available())
+        if not backend.available():
+            info["install_hint"] = backend.unavailable_message()
+        return info
 
     # -- model discovery ---------------------------------------------------
 
@@ -183,102 +220,35 @@ class LocalGGUFProvider(ModelProvider):
                 f"no valid .gguf model found under '{self.models_dir}'")
             return self._fallback(prompt, t0)
 
-        mode = self._requested_backend()
-        if mode == self.BACKEND_NONE:
+        backend = self._resolve_backend()
+        if backend is None:
             self.last_error = "local GGUF inference disabled " \
                               "(ZERION_GGUF_BACKEND=none)"
             return self._fallback(prompt, t0)
+        if not backend.available():
+            self.last_error = backend.unavailable_message()
+            return self._fallback(prompt, t0)
 
-        # CLI backend (primary on Termux where llama-cpp-python does not
-        # build; also tried automatically when the Python backend is absent).
-        if mode == self.BACKEND_CLI or (mode == self.BACKEND_AUTO
-                                        and not self._has_python_backend()):
-            cli = self._find_cli()
-            if cli is not None:
-                try:
-                    text, usage = await asyncio.to_thread(
-                        self._run_cli, cli, model, prompt)
-                except Exception as exc:  # noqa: BLE001
-                    self.last_error = f"llama.cpp CLI failed: {exc}"
-                    return self._fallback(prompt, t0)
-                if text:
-                    return self._real(model, text, usage, t0)
-                self.last_error = "llama.cpp CLI produced empty output"
-                return self._fallback(prompt, t0)
-
-        # Python backend (llama-cpp-python) — in-process, reports token usage.
-        if mode in (self.BACKEND_AUTO, self.BACKEND_PYTHON):
-            if self._has_python_backend():
-                try:
-                    text, usage = await asyncio.to_thread(
-                        self._run_python, model, prompt)
-                except Exception as exc:  # noqa: BLE001
-                    self.last_error = f"llama-cpp-python failed: {exc}"
-                    return self._fallback(prompt, t0)
-                if text:
-                    return self._real(model, text, usage, t0)
-                self.last_error = "llama-cpp-python produced empty output"
-                return self._fallback(prompt, t0)
-
-        self.last_error = (
-            "no local GGUF inference backend available — install "
-            "llama-cpp-python (pip install llama-cpp-python) or put "
-            "llama-cli/main on PATH (Termux: build llama.cpp locally)")
-        return self._fallback(prompt, t0)
-
-    def _run_python(self, model, prompt: str):
-        import importlib
-        import gc
-        llama_cpp = importlib.import_module("llama_cpp")
-        ctx = self._int_env("ZERION_GGUF_CONTEXT", 2048)
-        threads = self._threads()
-        max_tokens = self._int_env("ZERION_GGUF_MAX_TOKENS", 512)
-        temperature = self._float_env("ZERION_GGUF_TEMPERATURE", 0.7)
-        key = (str(model.path), ctx, threads)
-        if self._engine is None or self._engine_key != key:
-            # Release the previous resident model before loading a new one.
-            self._engine = None
-            gc.collect()
-            self._engine = llama_cpp.Llama(
-                model_path=str(model.path), n_ctx=ctx,
-                n_threads=threads, verbose=False)
-            self._engine_key = key
-        out = self._engine.create_completion(
-            prompt, max_tokens=max_tokens, temperature=temperature,
-            echo=False, stop=list(self._EOS_MARKERS))
-        text = self._clean_output(
-            (out.get("choices") or [{}])[0].get("text", ""))
-        usage = out.get("usage") or {}
-        return text, {"prompt_tokens": usage.get("prompt_tokens"),
-                      "completion_tokens": usage.get("completion_tokens")}
-
-    def _run_cli(self, cli: str, model, prompt: str):
-        import subprocess
-        max_tokens = self._int_env("ZERION_GGUF_MAX_TOKENS", 512)
-        ctx = self._int_env("ZERION_GGUF_CONTEXT", 2048)
-        threads = self._threads()
-        temperature = self._float_env("ZERION_GGUF_TEMPERATURE", 0.7)
-        timeout = self._int_env("ZERION_GGUF_TIMEOUT_SECONDS", 300)
-        cmd = [
-            cli, "-m", str(model.path), "-p", prompt,
-            "-n", str(max_tokens), "-c", str(ctx), "-t", str(threads),
-            "--temp", str(temperature), "--no-display-prompt", "-s", "0",
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=timeout, check=False)
-        if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "").strip()
-            raise RuntimeError(f"exit {proc.returncode}: {detail[:200]}")
-        text = self._clean_output(proc.stdout)
-        return text, {}
-
-    @classmethod
-    def _clean_output(cls, text: str) -> str:
-        for marker in cls._EOS_MARKERS:
-            idx = text.find(marker)
-            if idx != -1:
-                text = text[:idx]
-        return text.strip()
+        # Real inference through the detected backend (python or CLI). The
+        # backend receives the DISCOVERED absolute model path — never a path
+        # reconstructed from the model name.
+        try:
+            text, usage = await asyncio.to_thread(
+                backend.generate,
+                str(model.path), prompt,
+                max_tokens=self._int_env("ZERION_GGUF_MAX_TOKENS", 512),
+                context=self._int_env("ZERION_GGUF_CONTEXT", 2048),
+                threads=self._threads(),
+                temperature=self._float_env("ZERION_GGUF_TEMPERATURE", 0.7),
+                timeout_s=self._int_env("ZERION_GGUF_TIMEOUT_SECONDS", 300))
+        except Exception as exc:  # noqa: BLE001
+            self.last_error = f"{backend.error_label} failed: {exc}"
+            return self._fallback(prompt, t0)
+        if not text:
+            self.last_error = \
+                f"{backend.error_label} produced empty output"
+            return self._fallback(prompt, t0)
+        return self._real(model, text, usage, t0)
 
     # -- response helpers --------------------------------------------------
 

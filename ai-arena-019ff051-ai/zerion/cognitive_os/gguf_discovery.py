@@ -69,7 +69,11 @@ class LocalModelDiscovery:
     def __init__(self, models_dir: str = "models",
                  max_model_bytes: int = DEFAULT_MAX_MODEL_BYTES,
                  strict: bool = True):
-        self.models_dir = Path(models_dir)
+        # Resolve to an ABSOLUTE path so every discovered ``ModelInfo.path``
+        # is the real filesystem path of the model file (never a relative
+        # path reconstructed from a model name) and path-containment checks
+        # work regardless of the caller's CWD.
+        self.models_dir = Path(models_dir).resolve()
         self.max_model_bytes = max_model_bytes
         self.strict = strict
         self._models: Dict[str, ModelInfo] = {}

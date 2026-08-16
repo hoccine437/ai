@@ -1,7 +1,7 @@
 # ZERION_COGNITIVE_BENCHMARK.md
 
-**Run:** `run_1429de339ab3`  
-**Created:** 2026-08-16 15:14:27 UTC  
+**Run:** `run_d15293d8deda`  
+**Created:** 2026-08-16 21:02:46 UTC  
 **Seed:** 222  
 **Trials per task:** 2  
 **Modes:** BASELINE, ZERION, ABLATION_NO_VERIFICATION  
@@ -189,8 +189,8 @@ Provider-independence: the benchmark model implements the Slice 6 `ModelProvider
 
 ## REPRODUCIBILITY
 
-- run_id: `run_1429de339ab3`
-- timestamp: 2026-08-16 15:14:27 UTC
+- run_id: `run_d15293d8deda`
+- timestamp: 2026-08-16 21:02:46 UTC
 - seed: 222
 - trials per task: 2
 - model/profile: {"hallucination_bias": 0.5, "persistence_limit": 2, "guidance_retry_bonus": 2, "trust_first_source": true, "exploration_limit": 2, "guidance_acceptance": 0.9, "max_steps": 40}

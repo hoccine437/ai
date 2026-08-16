@@ -878,6 +878,34 @@ def profile_mobile_io_latency_and_throughput(payload):
         }
 
     # --- 7-Level Cognitive Hierarchy Query Engine ---
+    def _gguf_probe_report(self, force: bool = False) -> Dict[str, Any]:
+        """Full local-model lifecycle report with a REAL inference probe.
+
+        Evidence chain: DISCOVERED -> BACKEND -> LOAD TEST -> INFERENCE
+        PROBE -> READY. A file existing is only discovery; nothing reports
+        READY until a real load + real generation probe verified real tokens.
+        The probe result is cached for ``ZERION_GGUF_PROBE_TTL`` seconds
+        (default 60) so repeated status reads stay cheap on mobile.
+        """
+        from zerion.cognitive_os.gguf_backend import probe_local_gguf
+        cache = getattr(self, "_gguf_probe_cache", None)
+        ttl = 60
+        try:
+            ttl = max(0, int(os.environ.get("ZERION_GGUF_PROBE_TTL", "60")))
+        except ValueError:  # noqa: BLE001 — non-numeric TTL falls back to 60
+            ttl = 60
+        if cache is not None and not force \
+                and (time.monotonic() - cache["at"]) < ttl:
+            return cache["report"]
+        try:
+            report = probe_local_gguf(
+                str(self.cognitive_runtime.local_models.models_dir))
+        except Exception as e:  # noqa: BLE001
+            report = {"status": "UNKNOWN",
+                      "error": f"{type(e).__name__}: {str(e)[:200]}"}
+        self._gguf_probe_cache = {"at": time.monotonic(), "report": report}
+        return report
+
     def local_readiness(self) -> Dict[str, Any]:
         """ZERION LOCAL READINESS — real per-subsystem states, never
         hard-coded. Each entry is measured from the actual runtime (mic
@@ -938,27 +966,11 @@ def profile_mobile_io_latency_and_throughput(payload):
             out["tts"] = {"status": "UNKNOWN",
                            "error": f"{type(e).__name__}: {str(e)[:200]}"}
 
-        # LOCAL GGUF MODELS + inference backend
+        # LOCAL GGUF MODELS + inference backend — full lifecycle with a real
+        # probe. A file existing is only DISCOVERY; READY is earned only by a
+        # real load + real generation probe (see gguf_backend.probe_local_gguf).
         try:
-            from zerion.model_providers.gemini_provider import \
-                LocalGGUFProvider
-            probe = LocalGGUFProvider(models_dir=str(self.models_dir))
-            info = probe.backend_info()
-            disc = self.cognitive_runtime.local_models
-            discovered = disc.models() if hasattr(disc, "models") else {}
-            available = [m for m in discovered.values()
-                         if getattr(getattr(m, "status", None), "value", "") == "AVAILABLE"]
-            out["models"] = {
-                "dir": str(self.models_dir),
-                "discovered": len(discovered),
-                "available": len(available),
-                "selected": sorted(m.model_id for m in available)[:3],
-                "status": ("READY" if available else "NO_LOCAL_MODEL_AVAILABLE"),
-                "backend": {
-                    "python_backend": bool(info.get("python_backend")),
-                    "cli": info.get("cli"),
-                },
-            }
+            out["models"] = self._gguf_probe_report()
         except Exception as e:  # noqa: BLE001
             out["models"] = {"status": "UNKNOWN",
                               "error": f"{type(e).__name__}: {str(e)[:200]}"}

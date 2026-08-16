@@ -6,6 +6,7 @@ Implements full CLI interrogation, status monitoring, benchmark execution, and U
 import argparse
 import asyncio
 import json
+import os
 import signal
 import sys
 from zerion.engine import AscendantEngine
@@ -84,15 +85,25 @@ async def _enter_interactive_chat(engine: AscendantEngine,
 
     from zerion.cognitive_os.router_types import RoutingMode, Task, TaskType
 
-    # Banner values come from the REAL runtime — never hard-coded.
+    # Banner values come from the REAL runtime — never hard-coded. The model
+    # lines are evidence-based: a file existing is only DISCOVERY; COGNITION
+    # ACTIVE is claimed only after a real load + inference probe verified
+    # real tokens (see engine.local_readiness / gguf_backend).
     r = engine.local_readiness()
     models = r.get("models") or {}
     registry = getattr(engine, "local_model_registry", None)
     entries = registry.list_models() if registry is not None else []
-    if models.get("available"):
-        selected = models.get("selected") or []
-        model_line = ", ".join(selected) if selected else \
-            f"{models['available']} model(s) available"
+    ms = models.get("status", "NO_LOCAL_MODEL_AVAILABLE")
+    available = models.get("available") or 0
+    selected = models.get("selected") or []
+    backend = models.get("backend") or {}
+    probe = models.get("probe") or {}
+    if ms == "READY" and available:
+        model_line = ", ".join(str(s) for s in selected) if selected else \
+            f"{available} model(s) available"
+    elif available:
+        model_line = ", ".join(str(s) for s in selected) if selected else \
+            f"{available} model(s) available (DISCOVERED)"
     elif entries:
         model_line = f"{len(entries)} discovered, 0 available"
     else:
@@ -109,10 +120,19 @@ async def _enter_interactive_chat(engine: AscendantEngine,
     print("INPUT       TEXT")
     print("VOICE       OUTPUT ONLY")
     print(f"MODEL       {model_line}")
-    print("COGNITION   ACTIVE")
+    print(f"BACKEND     {backend.get('name', 'UNKNOWN')}"
+          + ("" if backend.get("available") else " (MISSING)"))
+    print(f"INFERENCE   {probe.get('inference', 'NOT_VERIFIED')}")
+    print(f"COGNITION   {'ACTIVE' if ms == 'READY' else 'MODEL_BLOCKED'}")
     print(f"TTS         {tts_line}")
     print("RUNTIME     ACTIVE")
     print("────────────────────────────────")
+    if ms == "BLOCKED" and available:
+        reason = probe.get("error") or models.get("reason") \
+            or backend.get("install_hint") or "inference not verified"
+        print(f"MODEL INFERENCE = FAILED — {reason}")
+    elif ms == "NO_LOCAL_MODEL_AVAILABLE":
+        print("MODEL INFERENCE = NOT_VERIFIED (no local .gguf model)")
     print("Type a message and press Enter. 'exit' or Ctrl-C to quit.\n")
 
     runtime = engine.cognitive_runtime
@@ -149,6 +169,24 @@ async def _enter_interactive_chat(engine: AscendantEngine,
             break
         try:
             print("[ZERION] THINKING...")
+            # Real remembered context: instructions the user gave (their own
+            # words, from the persistent UserLearningStore) are injected into
+            # the prompt so the model can actually retrieve them. Without
+            # signals the prompt is exactly the user's text.
+            prompt_text = text
+            try:
+                user_learning = getattr(runtime, "user_learning", None)
+                signals = (user_learning.learned_preferences()
+                           if user_learning is not None else [])
+                if signals:
+                    lines = [f"- {s.snippet}" for s in signals[-5:]]
+                    prompt_text = (
+                        "User instructions Zerion has learned (the user's own "
+                        "words; use as context):\n"
+                        + "\n".join(lines)
+                        + "\n\nUser message: " + text)
+            except Exception:  # noqa: BLE001 — context injection never breaks a turn
+                prompt_text = text
             task = Task(
                 type=TaskType.CONVERSATION,
                 description=f"User message: {text[:200]}",
@@ -163,7 +201,21 @@ async def _enter_interactive_chat(engine: AscendantEngine,
                 metadata={"source": "termux_chat"},
             )
             result = await runtime.execute_task(
-                task, text, mode=RoutingMode.OFFLINE_ONLY)
+                task, prompt_text, mode=RoutingMode.OFFLINE_ONLY)
+            # Observable trace (ZERION_DEBUG=1): safe metadata only — never
+            # internal chain-of-thought. request_id, model, backend, latency,
+            # success and output length come from the REAL result.
+            if os.environ.get("ZERION_DEBUG"):
+                usage = getattr(result, "usage", None) or {}
+                out_len = len(getattr(result, "output", "") or "")
+                print(
+                    f"[TRACE] request_id={task.task_id} "
+                    f"model={getattr(result, 'model', None) or 'NONE'} "
+                    f"backend={usage.get('backend') or 'NONE'} "
+                    f"latency_ms={getattr(result, 'latency_ms', None)} "
+                    f"success={bool(getattr(result, 'output', None))} "
+                    f"output_len={out_len} "
+                    f"status={getattr(getattr(result, 'status', None), 'value', 'FAILURE')}")
             out = getattr(result, "output", None)
             if out:
                 print(f"\n[ZERION]\n{out}")
@@ -558,9 +610,26 @@ def _print_readiness(engine: AscendantEngine) -> None:
     print(f"LOCAL STT:       {stt_status}"
           + (f"  ({stt_detail})" if stt_detail else ""))
     mod = r["models"]
-    print(f"LOCAL MODEL:     {mod['status']}"
-          + (f"  ({mod['dir']}, {mod['discovered']} discovered, "
-             f"{mod['available']} available)" if mod.get("dir") else ""))
+    # Evidence-based lifecycle: DISCOVERED -> BACKEND -> LOAD -> PROBE -> READY.
+    print("LOCAL MODEL:")
+    print(f"  DISCOVERED:    {'YES' if mod.get('discovered') else 'NO'}"
+          f" ({mod.get('discovered', 0)} file(s), "
+          f"{mod.get('available', 0)} valid)"
+          + (f"  dir={mod.get('dir')}" if mod.get("dir") else ""))
+    if mod.get("selected_path"):
+        print(f"  PATH:          {mod['selected_path']}")
+    b = mod.get("backend") or {}
+    print(f"  BACKEND:       {b.get('name', 'UNKNOWN')}"
+          + ("" if b.get("available") else " (MISSING)"))
+    p = mod.get("probe") or {}
+    print(f"  LOADABLE:      {p.get('loadable', 'NOT_ATTEMPTED')}")
+    print(f"  INFERENCE:     {p.get('inference', 'NOT_VERIFIED')}")
+    print(f"  STATUS:        {mod.get('status', 'UNKNOWN')}"
+          + (f"  ({mod.get('reason')})" if mod.get("reason") else ""))
+    if p.get("probe_latency_ms") is not None:
+        print(f"  PROBE LATENCY: {p['probe_latency_ms']} ms")
+    if p.get("error"):
+        print(f"  PROBE ERROR:   {p['error']}")
     tts = r["tts"]
     print(f"LOCAL TTS:       {tts['status']}"
           + (f"  ({tts['reason']})" if tts.get("reason") else ""))

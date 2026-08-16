@@ -134,7 +134,10 @@ class TestInteractiveChatRepl(unittest.IsolatedAsyncioTestCase):
         self.assertIn("INPUT       TEXT", text)
         self.assertIn("VOICE       OUTPUT ONLY", text)
         self.assertIn("MODEL       NONE (no .gguf in models/)", text)
-        self.assertIn("COGNITION   ACTIVE", text)
+        # COGNITION ACTIVE is only claimed after a real inference probe
+        # verified real tokens; with no model/backend evidence the honest
+        # state is MODEL_BLOCKED (the runtime itself stays ACTIVE).
+        self.assertIn("COGNITION   MODEL_BLOCKED", text)
         self.assertIn("RUNTIME     ACTIVE", text)
         # The typed turn went through the REAL runtime execute_task seam.
         self.assertEqual(runtime.calls, [("Hello Zerion.", "OFFLINE_ONLY")])

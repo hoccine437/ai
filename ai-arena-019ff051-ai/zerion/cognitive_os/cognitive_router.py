@@ -294,7 +294,13 @@ class CognitiveRouter:
     def _no_candidate_reason(self, task: Task, mode: RoutingMode) -> str:
         reasons: List[str] = []
         for name in self._provider_order:
+            h = self.health.get(name)
             if not self.health.eligible(name):
+                # Honest cause: health carries the last REAL failure (e.g. a
+                # MODEL_LOAD_FAILURE naming the missing GGUF backend) instead
+                # of a generic "no provider" message.
+                err = (h.last_error or h.status.value)[:160]
+                reasons.append(f"{name}: {err} (health={h.status.value})")
                 continue
             provider = self._providers[name]
             is_local = bool(getattr(provider, "is_local", False))
