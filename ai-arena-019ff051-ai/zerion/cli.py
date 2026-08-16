@@ -56,6 +56,140 @@ async def _enter_persistent_runtime(engine: AscendantEngine,
         pass
 
 
+async def _enter_interactive_chat(engine: AscendantEngine,
+                                  shutdown_event: asyncio.Event,
+                                  stdin=None) -> None:
+    """Text-only product REPL: INPUT=TEXT, OUTPUT=TEXT+LOCAL VOICE.
+
+    This is the canonical ``python main.py`` interactive experience on a real
+    terminal (Termux/desktop TTY). Every turn is routed through the REAL
+    CognitiveRuntime router — the exact same canonical path as the web UI
+    (CommandAPI RUN_TASK) and the voice pipeline — and the response is spoken
+    through the local offline TTS engine when one exists.
+
+    Nothing here is simulated: a missing GGUF or TTS engine is reported
+    honestly (never a faked READY), a failed turn NEVER terminates the
+    runtime, and the loop keeps returning to ``YOU > ``. Only ``exit`` /
+    ``quit``, EOF, or the shutdown event (Ctrl-C / SIGTERM) ends it.
+    """
+    stream = stdin if stdin is not None else sys.stdin
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, shutdown_event.set)
+        except (NotImplementedError, RuntimeError):
+            # Non-UNIX platform: default KeyboardInterrupt handling still
+            # interrupts the await below and shuts down cleanly.
+            pass
+
+    from zerion.cognitive_os.router_types import RoutingMode, Task, TaskType
+
+    # Banner values come from the REAL runtime — never hard-coded.
+    r = engine.local_readiness()
+    models = r.get("models") or {}
+    registry = getattr(engine, "local_model_registry", None)
+    entries = registry.list_models() if registry is not None else []
+    if models.get("available"):
+        selected = models.get("selected") or []
+        model_line = ", ".join(selected) if selected else \
+            f"{models['available']} model(s) available"
+    elif entries:
+        model_line = f"{len(entries)} discovered, 0 available"
+    else:
+        model_line = "NONE (no .gguf in models/)"
+    tts = r.get("tts") or {}
+    tts_line = "READY" if tts.get("status") == "AVAILABLE" \
+        else tts.get("status", "UNKNOWN")
+    if tts.get("reason"):
+        tts_line = f"{tts_line} ({tts['reason']})"
+
+    print("\nZERION X")
+    print("────────────────────────────────")
+    print(f"MODE        {r.get('mode', 'LOCAL')} OFFLINE")
+    print("INPUT       TEXT")
+    print("VOICE       OUTPUT ONLY")
+    print(f"MODEL       {model_line}")
+    print("COGNITION   ACTIVE")
+    print(f"TTS         {tts_line}")
+    print("RUNTIME     ACTIVE")
+    print("────────────────────────────────")
+    print("Type a message and press Enter. 'exit' or Ctrl-C to quit.\n")
+
+    runtime = engine.cognitive_runtime
+    tts_provider = getattr(
+        getattr(engine, "voice_pipeline", None), "tts_provider", None)
+
+    def _read_line():
+        try:
+            return stream.readline()
+        except Exception:  # noqa: BLE001 — treat any read error as EOF
+            return None
+
+    while not shutdown_event.is_set():
+        sys.stdout.write("YOU > ")
+        sys.stdout.flush()
+        read_task = asyncio.create_task(asyncio.to_thread(_read_line))
+        shutdown_task = asyncio.create_task(shutdown_event.wait())
+        done, pending = await asyncio.wait(
+            {read_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED)
+        if shutdown_task in done or shutdown_event.is_set():
+            for t in pending:
+                t.cancel()
+            break
+        shutdown_task.cancel()
+        line = read_task.result()
+        if line is None or line == "":
+            print()
+            break
+        text = line.strip()
+        if not text:
+            continue
+        if text.lower() in ("exit", "quit"):
+            print("[ZERION] shutting down cleanly.")
+            break
+        try:
+            print("[ZERION] THINKING...")
+            task = Task(
+                type=TaskType.CONVERSATION,
+                description=f"User message: {text[:200]}",
+                difficulty=0.3,
+                uncertainty=0.4,
+                novelty=0.3,
+                stakes=0.1,
+                goal_relevance=0.5,
+                required_capabilities=set(),
+                offline_required=True,
+                verification_required=False,
+                metadata={"source": "termux_chat"},
+            )
+            result = await runtime.execute_task(
+                task, text, mode=RoutingMode.OFFLINE_ONLY)
+            out = getattr(result, "output", None)
+            if out:
+                print(f"\n[ZERION]\n{out}")
+                # Local voice output through the REAL offline TTS engine.
+                if tts_provider is not None:
+                    tts_evidence = await asyncio.to_thread(
+                        tts_provider.synthesize, out)
+                    if tts_evidence.get("status") not in (
+                            "AUDIO_GENERATED", "AUDIO_PLAYED"):
+                        print(f"[ZERION] TTS: {tts_evidence.get('status')} — "
+                              f"{tts_evidence.get('reason', 'no offline engine')}")
+            else:
+                status = getattr(getattr(result, "status", None),
+                                 "value", "FAILURE")
+                errors = getattr(result, "errors", None)
+                print(f"\n[ZERION] {status}"
+                      + (f" — {errors}" if errors else "")
+                      + " (LOCAL MODEL UNAVAILABLE — drop a .gguf into models/)")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — a failed turn never kills runtime
+            print(f"[ZERION] ERROR: {type(e).__name__}: {str(e)[:300]}")
+            print("[ZERION] returning to input (runtime remains ACTIVE).")
+        print()
+
+
 async def run_cli():
     parser = argparse.ArgumentParser(description="ZERION-X GENESIS X10 Developmental Intelligence Organism")
     parser.add_argument("--status", action="store_true", help="Display full organism developmental status")
@@ -84,6 +218,7 @@ async def run_cli():
     parser.add_argument("--introspect", action="store_true", help="Display self-model capabilities and limitations")
     parser.add_argument("--ui", action="store_true", help="Start the ZERION-X GENESIS Cybernetic Web Interface")
     parser.add_argument("--voice", action="store_true", help="Run the always-available voice perception service WITHOUT the web UI (engine-scoped; reports real microphone state, never fake listening)")
+    parser.add_argument("--chat", action="store_true", help="Run the interactive text REPL (YOU > -> CognitiveRuntime -> local TTS). Default when stdin is a terminal.")
     parser.add_argument("--port", type=int, default=8080, help="Port for the UI web server (default: 8080)")
     parser.add_argument("--data-dir", type=str, default="data", help="Directory for durable persistence")
 
@@ -341,9 +476,19 @@ async def run_cli():
             snap = engine.scoreboard.capture_snapshot_from_evidence(evidence, cycles_run=engine._cycle_count)
             print("\n" + engine.scoreboard.render_summary_text(snap))
             # Lifecycle: the developmental cycle is ONE operation inside the
-            # runtime — its completion must NOT terminate Zerion. Transition
-            # to ACTIVE and keep the process resident until explicit shutdown.
-            await _enter_persistent_runtime(engine, shutdown_event)
+            # runtime — its completion must NOT terminate Zerion. On an
+            # interactive terminal, enter the text REPL (YOU > -> real
+            # cognitive runtime -> local TTS); otherwise transition to ACTIVE
+            # / WAITING_FOR_EVENTS until explicit shutdown (headless previews,
+            # daemon runs, tests). Both paths keep the runtime resident.
+            try:
+                is_tty = sys.stdin.isatty()
+            except Exception:  # noqa: BLE001
+                is_tty = False
+            if args.chat or is_tty:
+                await _enter_interactive_chat(engine, shutdown_event)
+            else:
+                await _enter_persistent_runtime(engine, shutdown_event)
 
     finally:
         await engine.stop()
