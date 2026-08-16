@@ -195,6 +195,33 @@ async def _enter_interactive_chat(engine: AscendantEngine,
         print()
 
 
+def _print_inference_ledger(engine: AscendantEngine) -> None:
+    """Render the observable inference ledger (real runtime records).
+
+    Every request/result pair is a genuine USER INPUT -> ROUTER -> RESULT
+    record captured by CognitiveRuntime.execute_task — never simulated.
+    """
+    ledger = engine.cognitive_runtime.inference_ledger
+    s = ledger.summary()
+    print("\n=== INFERENCE LEDGER (real runtime records) ===")
+    print(f"Requests:  {s['total']}  (successes: {s['successes']}, "
+          f"failures: {s['failures']})")
+    if s["last"] is None:
+        print("No inference has been executed yet "
+              "(run --chat and send a message, or a task).")
+    for req, res in zip(ledger.requests(), ledger.results()):
+        print(f"[{res.request_id}] {res.provider or 'NONE'}/"
+              f"{res.model or 'NONE'}")
+        print(f"    input:  {req.user_input[:60]!r}")
+        print(f"    output: {res.generated_text[:60]!r}"
+              if res.generated_text else
+              f"    output: NONE (status={res.termination_reason}, "
+              f"error={res.error or 'none'})")
+        print(f"    success={res.success} tokens=({res.prompt_tokens}, "
+              f"{res.completion_tokens}) decision={res.decision} "
+              f"({res.decision_reason})")
+
+
 async def run_cli():
     parser = argparse.ArgumentParser(description="ZERION-X GENESIS X10 Developmental Intelligence Organism")
     parser.add_argument("--status", action="store_true", help="Display full organism developmental status")
@@ -415,25 +442,12 @@ async def run_cli():
                       f"arch={m['architecture']} quant={m['quantization']} "
                       f"caps={','.join(m['capabilities']) or 'UNKNOWN'}")
 
-        elif args.inference:
-            ledger = engine.cognitive_runtime.inference_ledger
-            s = ledger.summary()
-            print("\n=== INFERENCE LEDGER (real runtime records) ===")
-            print(f"Requests:  {s['total']}  (successes: {s['successes']}, "
-                  f"failures: {s['failures']})")
-            if s["last"] is None:
-                print("No inference has been executed yet (run the chat or a task).")
-            for req, res in zip(ledger.requests(), ledger.results()):
-                print(f"[{res.request_id}] {res.provider or 'NONE'}/"
-                      f"{res.model or 'NONE'}")
-                print(f"    input:  {req.user_input[:60]!r}")
-                print(f"    output: {res.generated_text[:60]!r}"
-                      if res.generated_text else
-                      f"    output: NONE (status={res.termination_reason}, "
-                      f"error={res.error or 'none'})")
-                print(f"    success={res.success} tokens=({res.prompt_tokens}, "
-                      f"{res.completion_tokens}) decision={res.decision} "
-                      f"({res.decision_reason})")
+        elif args.inference and not args.chat:
+            # Standalone mode: print the ledger of the CURRENT process. To see
+            # a live chat session's records, combine with --chat so the REPL
+            # runs first and the ledger prints on exit (the ledger is real
+            # per-process runtime state, never persisted or fabricated).
+            _print_inference_ledger(engine)
 
         elif args.level:
             ans = engine.answer_hierarchy_level(args.level)
@@ -515,6 +529,10 @@ async def run_cli():
                 await _enter_interactive_chat(engine, shutdown_event)
             else:
                 await _enter_persistent_runtime(engine, shutdown_event)
+            # Session evidence (opt-in): --inference prints the real
+            # request/result records captured by this process's runtime.
+            if args.inference:
+                _print_inference_ledger(engine)
 
     finally:
         await engine.stop()

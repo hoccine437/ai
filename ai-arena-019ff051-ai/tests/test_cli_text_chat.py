@@ -202,6 +202,68 @@ class TestInteractiveChatRepl(unittest.IsolatedAsyncioTestCase):
 
 
 class TestMainPyChatEndToEnd(unittest.TestCase):
+    def test_chat_with_inference_prints_real_session_ledger(self):
+        """``python main.py --chat --inference`` records every typed turn in
+        the observable inference ledger and prints it at exit — the runtime
+        evidence (input -> router -> result) for the session just run, never
+        fabricated. Without --inference the REPL stays quiet on exit."""
+        proc = subprocess.Popen(
+            [sys.executable, "-u", str(MAIN_PY), "--chat", "--inference",
+             "--data-dir", tempfile.mkdtemp(prefix="zerion_ledger_")],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True,
+            env=_no_key_env(), cwd=str(REPO_ROOT))
+        buf: list = []
+
+        def read_until(substr: str, timeout: float) -> tuple:
+            start = len(buf)
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                ch = proc.stdout.read(1)
+                if not ch:
+                    return "".join(buf), False
+                buf.append(ch)
+                if substr in "".join(buf[start:]):
+                    return "".join(buf), True
+            return "".join(buf), False
+
+        try:
+            out, ok = read_until("YOU > ", 120)
+            self.assertTrue(ok, msg=f"REPL prompt never appeared:\n{out}")
+            proc.stdin.write("trace me\n")
+            proc.stdin.flush()
+            out, ok = read_until("YOU > ", 60)
+            self.assertTrue(ok, msg=f"REPL did not loop:\n{out}")
+            proc.stdin.write("exit\n")
+            proc.stdin.flush()
+            out, ok = read_until("INFERENCE LEDGER", 30)
+            self.assertTrue(
+                ok, msg=f"ledger section missing after exit:\n{out[-1500:]}")
+            proc.stdin.close()
+            proc.wait(timeout=30)
+            self.assertEqual(proc.returncode, 0,
+                             msg=f"main.py exited {proc.returncode}")
+            # Drain whatever the process wrote after the header so the full
+            # ledger content is captured (the header can appear mid-buffer).
+            while True:
+                ch = proc.stdout.read(1)
+                if not ch:
+                    break
+                buf.append(ch)
+            out = "".join(buf)
+            # The real session record: exactly one request, the typed input,
+            # and an honest result (no model in this environment).
+            self.assertIn("Requests:  1", out)
+            self.assertIn("'trace me'", out)
+            self.assertIn("success=False", out)
+        finally:
+            if proc.poll() is None:
+                proc.send_signal(signal.SIGINT)
+                try:
+                    proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+
     def test_python_main_py_chat_subprocess_end_to_end(self):
         """Real ``python main.py --chat``: engine starts, banner prints,
         piped text is consumed by the REPL across multiple turns, 'exit'
