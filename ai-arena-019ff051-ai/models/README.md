@@ -28,8 +28,10 @@ models/
 uses the first REAL backend it finds:
 
 1. `llama-cpp-python` (`pip install llama-cpp-python`) — desktop/server,
-2. `llama.cpp` CLI on `PATH` (`llama-cli` / `main`) — Termux/mobile via a
-   local llama.cpp build (see `../TERMUX.md`).
+2. `llama.cpp` CLI on `PATH` (`llama-cli` / `main`) — Termux/mobile:
+   `pkg install llama-cpp` provides a prebuilt `llama-cli` (see
+   `../TERMUX.md`; do NOT `pip install llama-cpp-python` on Termux — no
+   Android aarch64 wheels, and pip's source build of cmake fails on iconv).
 
 If neither backend exists, generation returns an honest structured
 `MODEL_LOAD_FAILURE` naming the missing piece — never canned text.

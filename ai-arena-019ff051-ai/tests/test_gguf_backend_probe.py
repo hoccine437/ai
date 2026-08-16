@@ -160,6 +160,24 @@ class _GGUFProbeTest(unittest.TestCase):
         self.assertEqual(report["status"], "BLOCKED")
         self.assertIn("ZERION_GGUF_BACKEND=none", report["reason"])
 
+    def test_termux_hint_never_suggests_pip_llama_cpp_python(self):
+        """On Termux, the install hint must point at the prebuilt llama-cpp
+        package and never suggest `pip install llama-cpp-python` — that path
+        has no Android aarch64 wheels and dies building cmake from source
+        (iconv not found)."""
+        _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
+        os.environ["ZERION_GGUF_BACKEND"] = "auto"
+        os.environ["TERMUX_VERSION"] = "0.117.3"
+        report = probe_local_gguf(self.models_dir)
+        self.assertEqual(report["status"], "BLOCKED")
+        self.assertIn("no local GGUF inference backend", report["reason"])
+        hint = report["backend"]["install_hint"]
+        self.assertIn("pkg install llama-cpp", hint)
+        self.assertNotIn("pip install llama-cpp-python", hint)
+        # The CLI-backend message is Termux-aware too.
+        self.assertIn("pkg install llama-cpp",
+                      report["backend"]["detail"])
+
     # -- output parser ------------------------------------------------------
 
     def test_extract_cli_output_strips_header_echo_and_footer(self):

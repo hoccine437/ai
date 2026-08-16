@@ -43,6 +43,35 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 EOS_MARKERS = ("</s>", "<|endoftext|>", "<|im_end|>", "<|end|>",
                "<end_of_turn>", "<|eot_id|>", "[end of text]")
 
+
+def is_termux() -> bool:
+    """True when running under Termux (Android). Same evidence as the rest of
+    the runtime (VoiceEnvironment / TermuxAdapter / resources): Termux sets
+    ``TERMUX_VERSION`` and the on-device data dir exists."""
+    return bool(os.environ.get("TERMUX_VERSION")) or os.path.exists(
+        "/data/data/com.termux")
+
+
+def _install_hint() -> str:
+    """How to get a real GGUF backend, platform-aware.
+
+    On Termux the answer is NEVER ``pip install llama-cpp-python``: pip has no
+    Android aarch64 wheels for it or for its ``cmake`` build dependency, so it
+    tries to compile cmake from source and the bootstrap dies with
+    ``iconv is required, but was not found``. Termux ships a prebuilt
+    ``llama-cpp`` package instead (provides ``llama-cli``, no compilation).
+    """
+    if is_termux():
+        return ("install llama.cpp via pkg: `pkg install llama-cpp` (prebuilt "
+                "llama-cli, no compilation). Never install the "
+                "llama-cpp-python package on Termux via pip — there are no "
+                "Android aarch64 wheels, so pip tries to build cmake from "
+                "source and fails (iconv not found). If llama-cpp is "
+                "unavailable on your channel, build llama.cpp per TERMUX.md")
+    return ("install llama-cpp-python (pip install llama-cpp-python) or put "
+            "llama-cli/main on PATH (Termux: pkg install llama-cpp; see "
+            "TERMUX.md)")
+
 # Minimal liveness probe: the backend must produce these exact tokens back.
 PROBE_PROMPT = "Reply with exactly: ZERION_LOCAL_OK"
 PROBE_TOKEN = "ZERION_LOCAL_OK"
@@ -132,6 +161,10 @@ class LlamaCppPythonBackend:
         return bool(self._python_available())
 
     def unavailable_message(self) -> str:
+        if is_termux():
+            # On Termux the pip path is a guaranteed cmake/iconv build
+            # failure (no aarch64 wheels) — point at the prebuilt package.
+            return _install_hint()
         return ("llama-cpp-python not importable — install it with "
                 "pip install llama-cpp-python (desktop/server)")
 
@@ -184,10 +217,7 @@ class LlamaCppCLIBackend:
             and os.access(self.cli_path, os.X_OK)
 
     def unavailable_message(self) -> str:
-        return ("no local GGUF inference backend available — install "
-                "llama-cpp-python (pip install llama-cpp-python) or put "
-                "llama-cli/main on PATH (Termux: build llama.cpp locally; "
-                "see TERMUX.md)")
+        return f"no local GGUF inference backend available — {_install_hint()}"
 
     # -- execution ----------------------------------------------------------
 
@@ -224,10 +254,7 @@ class UnsupportedBackend:
 
     def unavailable_message(self) -> str:
         return (self._reason or
-                "no local GGUF inference backend available — install "
-                "llama-cpp-python (pip install llama-cpp-python) or put "
-                "llama-cli/main on PATH (Termux: build llama.cpp locally; "
-                "see TERMUX.md)")
+                f"no local GGUF inference backend available — {_install_hint()}")
 
     def generate(self, *args: Any, **kwargs: Any) -> Tuple[str, Dict[str, Any]]:
         raise RuntimeError(self.unavailable_message())

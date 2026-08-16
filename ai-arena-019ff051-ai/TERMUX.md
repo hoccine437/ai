@@ -40,7 +40,7 @@ python3 -m pip install -r requirements.txt    # httpx (pure Python); the openai 
 | Local STT | whisper.cpp / vosk / openai-whisper on PATH | Binary presence is detected, never assumed. |
 | OpenAI provider | `.env` with `OPENAI_API_KEY` | Uses `httpx` directly (never the `openai` SDK, which is not installed on Termux — see “Pinned dependencies” below). |
 | numpy (audio processing) | `pkg install python-numpy` | **Do not** `pip install numpy` on Termux — no Android aarch64 wheels; pip will try to compile. It is opt-in (`audio` extra) and not needed for the core or for termux-api mic capture. |
-| llama.cpp GGUF | build locally (`pkg`/compile) | Real inference is wired into `LocalGGUFProvider`: it auto-detects `llama-cli`/`main` on PATH (Termux) or `llama-cpp-python` (desktop). Models live in `models/*.gguf` (`ai-arena-019ff051-ai/models/`). See “Real local GGUF inference” below. |
+| llama.cpp GGUF | **`pkg install llama-cpp`** (prebuilt `llama-cli`; no compilation) | Real inference is wired into `LocalGGUFProvider`: it auto-detects `llama-cli`/`main` on PATH (Termux) or `llama-cpp-python` (desktop). Models live in `models/*.gguf` (`ai-arena-019ff051-ai/models/`). See “Real local GGUF inference” below. |
 
 ## Real local GGUF inference
 
@@ -58,7 +58,16 @@ Generation runs through a lazy backend chain:
 
 1. **llama-cpp-python** (desktop/server: `pip install llama-cpp-python`)
 2. **llama.cpp CLI** (`llama-cli`, or legacy `main`, on PATH — the Termux path:
-   build llama.cpp locally with `pkg`/compile and put the binary on PATH)
+   `pkg install llama-cpp`, a prebuilt llama.cpp that provides `llama-cli`)
+
+> **Do NOT `pip install llama-cpp-python` on Termux.** There are no Android
+> aarch64 wheels for it or for its `cmake` build dependency, so pip tries to
+> compile cmake from source — and cmake's bootstrap fails with
+> `iconv is required, but was not found` (this is the exact error a failed
+> install leaves behind). On Termux use the prebuilt package instead:
+> `pkg install llama-cpp`. If it is not available on your channel, build
+> llama.cpp from source per the quick start below. Desktop/server machines
+> (x86_64, aarch64 Linux/macOS/Windows) install llama-cpp-python normally.
 
 If neither backend exists the provider returns an honest labeled fallback that
 names the missing piece — it never fabricates model text. Tunables (env):
@@ -87,13 +96,19 @@ python3 -m pip install -r requirements.txt
 # 3. Verify discovery — your model should be listed here
 python3 main.py --models
 
-# 4. Install a real inference backend: llama.cpp CLI. (llama-cpp-python has no
-#    Android aarch64 wheels, so Termux uses the llama.cpp command-line tool.)
-pkg install -y cmake ninja clang make git
-cd ~ && git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j2 --target llama-cli
-cp build/bin/llama-cli "$PREFIX/bin/"
+# 4. Install a real inference backend: the llama.cpp CLI. Termux ships a
+#    prebuilt package that provides `llama-cli` — no compilation needed.
+#    (Never `pip install llama-cpp-python` here: no Android aarch64 wheels,
+#    so pip compiles cmake from source and its bootstrap dies with
+#    `iconv is required, but was not found`.)
+pkg install -y llama-cpp
+
+#    If `llama-cpp` is not on your channel, build llama-cli from source:
+#    pkg install -y cmake ninja clang make git
+#    cd ~ && git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp
+#    cmake -B build -DCMAKE_BUILD_TYPE=Release
+#    cmake --build build -j2 --target llama-cli
+#    cp build/bin/llama-cli "$PREFIX/bin/"
 cd ~/ai-arena-019ff051-ai
 
 # 5. Run the web UI (open http://localhost:8080 on the phone)

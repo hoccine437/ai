@@ -36,6 +36,10 @@ ZERION-X ready on Termux. Next steps:
   python3 main.py --cycles 1
 
 Optional (not required for the core):
+  - Local GGUF inference: `pkg install llama-cpp` (prebuilt llama-cli; never
+    pip install llama-cpp-python on Termux — no Android aarch64 wheels, and
+    pip's cmake source build fails on iconv). Then drop .gguf files into
+    models/ and run `python3 main.py --models` to verify discovery.
   - Local STT: install whisper.cpp / vosk via pkg or build; the runtime
     auto-detects them on PATH (see zerion/voice/providers.py).
   - OpenAI/Gemini providers: copy .env.example to .env and set your keys.
