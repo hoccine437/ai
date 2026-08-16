@@ -17,6 +17,7 @@ live exclusively in adapters.
 """
 
 import asyncio
+import os
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 from zerion.cognitive_os.gguf_discovery import (
@@ -49,7 +50,21 @@ from zerion.cognitive_os.router_types import (
 
 DEFAULT_ROUTING_POLICY_VERSION = 6
 DEFAULT_PROVIDER_TIMEOUT_S = 30.0
+# Local GGUF inference includes the model load, which on Android/Termux can
+# take minutes for a 9B-class file — a fixed 30 s budget would kill llama-cli
+# mid-load on every turn. Default 300 s; ZERION_GGUF_TIMEOUT_SECONDS overrides.
+DEFAULT_LOCAL_PROVIDER_TIMEOUT_S = 300.0
 DEFAULT_MAX_ATTEMPTS = 2
+
+
+def _local_timeout_from_env() -> float:
+    raw = os.environ.get("ZERION_GGUF_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_LOCAL_PROVIDER_TIMEOUT_S
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return DEFAULT_LOCAL_PROVIDER_TIMEOUT_S
 
 
 class ModelSelector:
@@ -159,6 +174,7 @@ class CognitiveRouter:
                  depth: Optional[CognitiveDepthScore] = None,
                  policy_version: int = DEFAULT_ROUTING_POLICY_VERSION,
                  provider_timeout_s: float = DEFAULT_PROVIDER_TIMEOUT_S,
+                 local_provider_timeout_s: Optional[float] = None,
                  max_attempts: int = DEFAULT_MAX_ATTEMPTS,
                  emit: Optional[Callable[[str, Dict[str, Any]], Awaitable[None]]] = None):
         self.health = health or ProviderHealthTracker()
@@ -169,6 +185,9 @@ class CognitiveRouter:
         self.selector = ModelSelector(depth=depth, policy_version=policy_version)
         self.policy_version = policy_version
         self.provider_timeout_s = provider_timeout_s
+        self.local_provider_timeout_s = \
+            local_provider_timeout_s if local_provider_timeout_s is not None \
+            else _local_timeout_from_env()
         self.max_attempts = max(1, max_attempts)
         self.emit = emit
         self._providers: Dict[str, ModelProvider] = {}
@@ -201,13 +220,41 @@ class CognitiveRouter:
 
     # -- candidate enumeration ----------------------------------------------
 
+    def _routable(self, provider_name: str, mode: RoutingMode) -> bool:
+        """Normal routing eligibility, plus offline-only LAST RESORT for the
+        local provider.
+
+        In OFFLINE_ONLY the local provider is the only legal choice. A slow
+        phone loading a 9B model legitimately times out and trips the health
+        circuit breaker — but that is not a permanent failure: the provider
+        must still be attempted (with its long, size-aware timeout) so real
+        inference can succeed when the load finally completes. The attempt is
+        a REAL call; if it fails again the failure is reported honestly.
+        """
+        if self.health.eligible(provider_name):
+            return True
+        provider = self._providers.get(provider_name)
+        if provider is None or not getattr(provider, "is_local", False):
+            return False
+        if mode != RoutingMode.OFFLINE_ONLY:
+            return False
+        h = self.health.get(provider_name)
+        if not (h.configured and h.integration_implemented):
+            return False
+        models = self._models.get(provider_name, {})
+        return any(m["status"] in (ProviderStatus.AVAILABLE,
+                                    ProviderStatus.UNKNOWN)
+                   for m in models.values())
+
     def _candidates(self, task: Task, mode: RoutingMode,
                     required: Set[str],
                     field: Optional[CognitiveField] = None) -> List[Tuple[float, str, str, bool]]:
-        """All eligible (provider, model) pairs, scored. Deterministic order."""
+        """All eligible (provider, model) pairs, scored. Deterministic order.
+        In OFFLINE_ONLY a degraded/unavailable LOCAL provider with a usable
+        model is kept as a scored last resort (see ``_routable``)."""
         out: List[Tuple[float, str, str, bool]] = []
         for name in self._provider_order:
-            if not self.health.eligible(name):
+            if not self._routable(name, mode):
                 continue
             provider = self._providers[name]
             is_local = bool(getattr(provider, "is_local", False))
@@ -384,7 +431,7 @@ class CognitiveRouter:
             provider_name = step["provider"]
             model_id = step["model"]
             provider = self._providers.get(provider_name)
-            if provider is None or not self.health.eligible(provider_name):
+            if provider is None or not self._routable(provider_name, mode):
                 last_errors.append(f"{provider_name}: provider unavailable")
                 continue
             is_local = bool(getattr(provider, "is_local", False))
@@ -398,7 +445,7 @@ class CognitiveRouter:
                                                  "provider": provider_name,
                                                  "model": model_id,
                                                  "attempt": attempts})
-            timeout = self._timeout_for(task)
+            timeout = self._timeout_for(task, provider_name)
             call = ProviderCall(task=task, prompt=prompt, model_id=model_id,
                                 timeout_s=timeout)
             try:
@@ -491,11 +538,20 @@ class CognitiveRouter:
         await self._emit("ROUTING_FAILED", result.to_dict(redact=True))
         return result
 
-    def _timeout_for(self, task: Task) -> float:
-        if task.latency_budget_ms:
-            return max(0.1, min(task.latency_budget_ms / 1000.0,
-                                self.provider_timeout_s))
-        return self.provider_timeout_s
+    def _timeout_for(self, task: Task, provider_name: str) -> float:
+        provider = self._providers.get(provider_name)
+        is_local = bool(getattr(provider, "is_local", False))
+        base = (self.local_provider_timeout_s if is_local
+                else self.provider_timeout_s)
+        if not task.latency_budget_ms:
+            return base
+        budget = task.latency_budget_ms / 1000.0
+        if is_local:
+            # Local inference includes the model load; a generic latency
+            # budget must never starve a real local call into a spurious
+            # timeout on a slow device.
+            return max(60.0, min(budget, base))
+        return max(0.1, min(budget, base))
 
     async def _emit(self, event_type: str, payload: Dict[str, Any]) -> None:
         if self.emit is None:

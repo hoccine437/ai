@@ -77,6 +77,50 @@ PROBE_PROMPT = "Reply with exactly: ZERION_LOCAL_OK"
 PROBE_TOKEN = "ZERION_LOCAL_OK"
 
 
+def adaptive_probe_timeout(size_bytes: Optional[int]) -> float:
+    """Probe budget scaled to the actual model file size.
+
+    A 9B Q2_K model is ~3.4 GiB; on Android/Termux the model usually lives on
+    /storage/emulated/0, which is FUSE-backed, so the first read/mmap can take
+    minutes and would exceed any fixed short timeout — killing llama-cli
+    mid-load and reporting a false failure. Budget 90 s per GiB (floor 120 s,
+    cap 1800 s) so a real probe can actually finish. An explicit
+    ``ZERION_GGUF_PROBE_TIMEOUT`` always overrides.
+    """
+    explicit = os.environ.get("ZERION_GGUF_PROBE_TIMEOUT", "").strip()
+    if explicit:
+        try:
+            return max(1.0, float(explicit))
+        except ValueError:
+            pass
+    size_gb = max(0.0, (size_bytes or 0) / (1024 ** 3))
+    return min(1800.0, max(120.0, 90.0 * size_gb))
+
+
+def _slow_device_hint() -> str:
+    """Actionable guidance when a large model cannot load within budget on
+    constrained hardware (S21 FE-class phones running Termux)."""
+    parts = [
+        "the model file is very large for this device and the first load can "
+        "take minutes (this is a real load, not a hang)",
+    ]
+    if is_termux():
+        parts.append(
+            "on Android: copy the .gguf into Termux's own storage "
+            "(mkdir -p ~/models && cp <model>.gguf ~/models/) — models on "
+            "/storage/emulated/0 load much slower because that path is "
+            "FUSE-backed")
+        parts.append(
+            "allow more time with ZERION_GGUF_PROBE_TIMEOUT / "
+            "ZERION_GGUF_TIMEOUT_SECONDS, shrink the KV cache with "
+            "ZERION_GGUF_CONTEXT=512, or try ZERION_GGUF_NO_MMAP=1 (buffered "
+            "I/O instead of mmap)")
+        parts.append(
+            "on 6-8 GB phones prefer a ~1-2 GB model (3B-class Q4_K_M) over "
+            "a 9B Q2_K")
+    return "; ".join(parts)
+
+
 def clean_generated_text(text: str) -> str:
     for marker in EOS_MARKERS:
         idx = text.find(marker)
@@ -230,6 +274,12 @@ class LlamaCppCLIBackend:
             "--temp", str(temperature), "--no-display-prompt",
             "-no-cnv", "-st", "-s", "0",
         ]
+        if _bool_env("ZERION_GGUF_NO_MMAP", False):
+            # Android /storage/emulated/0 is FUSE-backed: mmap page faults on
+            # it are very slow, so reading the file with buffered I/O is often
+            # much faster. Needs free RAM ~= model size (fine on 8 GB phones
+            # for ≤4 GiB models; opt-in for exactly this reason).
+            cmd.append("--no-mmap")
         proc = subprocess.run(cmd, capture_output=True, text=True,
                               timeout=timeout_s, check=False,
                               stdin=subprocess.DEVNULL)
@@ -320,6 +370,19 @@ def probe_backend(backend: object, model_path: str, *,
                 f"probe output did not contain expected token "
                 f"{PROBE_TOKEN!r} (got {text[:120]!r})"),
         }
+    except subprocess.TimeoutExpired as exc:
+        # A timeout is NOT the same as a crash: the backend was still alive,
+        # still loading/generating. Report it as its own lifecycle state with
+        # real guidance instead of pretending the model is broken.
+        return {
+            "loadable": "TIMEOUT",
+            "inference": "NOT_VERIFIED",
+            "probe_prompt": probe_prompt,
+            "probe_output": None,
+            "probe_latency_ms": round((time.perf_counter() - t0) * 1000.0, 1),
+            "error": (f"TimeoutExpired after {timeout_s:.0f}s (backend was "
+                      f"still loading/generating) — {_slow_device_hint()}"),
+        }
     except Exception as exc:  # noqa: BLE001 — structured, never a crash
         return {
             "loadable": "FAILED",
@@ -389,7 +452,8 @@ def probe_local_gguf(models_dir: str, *, timeout_s: Optional[float] = None
                           "inference": "NOT_VERIFIED",
                           "probe_prompt": PROBE_PROMPT,
                           "probe_output": None,
-                          "probe_latency_ms": None, "error": None},
+                          "probe_latency_ms": None, "error": None,
+                          "timeout_s": None},
                 "status": "NO_LOCAL_MODEL_AVAILABLE",
                 "reason": f"no valid .gguf file under '{disc.models_dir}'"}
 
@@ -401,7 +465,8 @@ def probe_local_gguf(models_dir: str, *, timeout_s: Optional[float] = None
                           "inference": "NOT_VERIFIED",
                           "probe_prompt": PROBE_PROMPT,
                           "probe_output": None,
-                          "probe_latency_ms": None, "error": None},
+                          "probe_latency_ms": None, "error": None,
+                          "timeout_s": None},
                 "status": "BLOCKED",
                 "reason": "local GGUF inference disabled (ZERION_GGUF_BACKEND=none)"}
 
@@ -412,7 +477,8 @@ def probe_local_gguf(models_dir: str, *, timeout_s: Optional[float] = None
                           "inference": "NOT_VERIFIED",
                           "probe_prompt": PROBE_PROMPT,
                           "probe_output": None,
-                          "probe_latency_ms": None, "error": None},
+                          "probe_latency_ms": None, "error": None,
+                          "timeout_s": None},
                 "status": "BLOCKED",
                 "reason": backend.unavailable_message()}
 
@@ -430,8 +496,9 @@ def probe_local_gguf(models_dir: str, *, timeout_s: Optional[float] = None
                 "reason": "inference not verified (probe disabled)"}
 
     if timeout_s is None:
-        timeout_s = _float_env("ZERION_GGUF_PROBE_TIMEOUT", 120.0)
+        timeout_s = adaptive_probe_timeout(sel.size_bytes)
     probe = probe_backend(backend, str(sel.path), timeout_s=timeout_s)
+    probe = {**probe, "timeout_s": timeout_s}
     verified = probe.get("inference") == "VERIFIED"
     return {**base,
             "backend": _backend_report(backend, requested),
@@ -442,6 +509,13 @@ def probe_local_gguf(models_dir: str, *, timeout_s: Optional[float] = None
 
 
 # -- tunables ----------------------------------------------------------------
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw not in ("0", "false", "off", "no", "")
+
 
 def _int_env(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()

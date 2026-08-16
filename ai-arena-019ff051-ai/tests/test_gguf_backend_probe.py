@@ -144,6 +144,39 @@ class _GGUFProbeTest(unittest.TestCase):
         self.assertEqual(report["probe"]["inference"], "FAILED")
         self.assertIn("expected token", report["reason"])
 
+    def test_adaptive_probe_timeout_scales_with_model_size(self):
+        """The probe budget must scale with the model file size: a 9B Q2_K
+        (~3.4 GiB) on a phone legitimately needs minutes to load, and a fixed
+        120 s kill was producing false 'model broken' failures."""
+        from zerion.cognitive_os.gguf_backend import adaptive_probe_timeout
+        self.assertEqual(adaptive_probe_timeout(0), 120.0)
+        self.assertEqual(adaptive_probe_timeout(1 << 30), 120.0)   # 1 GiB floor
+        self.assertGreaterEqual(adaptive_probe_timeout(4 << 30), 300.0)
+        self.assertGreaterEqual(adaptive_probe_timeout(10 << 30), 800.0)
+        self.assertLessEqual(adaptive_probe_timeout(100 << 30), 1800.0)
+
+    def test_probe_reports_the_timeout_used(self):
+        _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
+        self._fake_cli(self._real_shape_body())
+        report = probe_local_gguf(self.models_dir)
+        self.assertEqual(report["status"], "READY")
+        self.assertEqual(report["probe"]["timeout_s"], 120.0)
+
+    def test_probe_timeout_is_distinct_state_with_guidance(self):
+        """A backend still alive past the budget is TIMEOUT (an interrupted
+        load), never a fake 'model broken' FAILED, and the error names what to
+        do on a slow phone."""
+        _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
+        self._fake_cli("sleep 5\nprintf 'ZERION_LOCAL_OK\\n'\n")
+        os.environ["ZERION_GGUF_PROBE_TIMEOUT"] = "2"
+        report = probe_local_gguf(self.models_dir)
+        self.assertEqual(report["status"], "BLOCKED")
+        self.assertEqual(report["probe"]["loadable"], "TIMEOUT")
+        self.assertEqual(report["probe"]["inference"], "NOT_VERIFIED")
+        self.assertIn("TimeoutExpired after 2s", report["probe"]["error"])
+        self.assertIn("still loading/generating", report["probe"]["error"])
+        self.assertEqual(report["probe"]["timeout_s"], 2.0)
+
     def test_probe_disabled_stays_blocked(self):
         _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
         self._fake_cli(self._real_shape_body())

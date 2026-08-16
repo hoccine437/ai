@@ -131,6 +131,14 @@ async def _enter_interactive_chat(engine: AscendantEngine,
         reason = probe.get("error") or models.get("reason") \
             or backend.get("install_hint") or "inference not verified"
         print(f"MODEL INFERENCE = FAILED — {reason}")
+        low = reason.lower()
+        if "timeout" in low or "still alive" in low:
+            print("NOTE: the model was still loading when the probe budget ran "
+                  "out, not broken. On Android, copy the .gguf into Termux "
+                  "home (mkdir -p ~/models && cp <model>.gguf ~/models/) and/or "
+                  "allow more time via ZERION_GGUF_PROBE_TIMEOUT / "
+                  "ZERION_GGUF_TIMEOUT_SECONDS; a smaller model also loads "
+                  "faster on this phone.")
     elif ms == "NO_LOCAL_MODEL_AVAILABLE":
         print("MODEL INFERENCE = NOT_VERIFIED (no local .gguf model)")
     print("Type a message and press Enter. 'exit' or Ctrl-C to quit.\n")
@@ -231,9 +239,13 @@ async def _enter_interactive_chat(engine: AscendantEngine,
                 status = getattr(getattr(result, "status", None),
                                  "value", "FAILURE")
                 errors = getattr(result, "errors", None)
+                tail = (" (LOCAL MODEL UNAVAILABLE — drop a .gguf into "
+                        "models/)" if not available else
+                        " (MODEL BLOCKED — see the readiness banner above; on "
+                        "slow phones a smaller model or ZERION_GGUF_NO_MMAP=1 "
+                        "helps)")
                 print(f"\n[ZERION] {status}"
-                      + (f" — {errors}" if errors else "")
-                      + " (LOCAL MODEL UNAVAILABLE — drop a .gguf into models/)")
+                      + (f" — {errors}" if errors else "") + tail)
             # Principle 8: real user-learning signals from every turn
             # (explicit preferences/corrections only; plain turns are neutral).
             user_learning = getattr(runtime, "user_learning", None)
@@ -557,7 +569,12 @@ async def run_cli():
 
         else:
             # Canonical startup contract (spec §35): python main.py verifies
-            # local readiness from REAL runtime checks before running.
+            # local readiness from REAL runtime checks before running. On a
+            # phone the probe really loads the .gguf, which can take minutes;
+            # say so instead of appearing hung.
+            print("[ZERION] Verifying local model readiness — the probe really "
+                  "loads the .gguf and can take minutes on a phone "
+                  "(ZERION_GGUF_PROBE_TIMEOUT controls the budget).")
             _print_readiness(engine)
             n = max(1, args.cycles)
             print(f"[GENESIS X10] Executing {n} autonomous developmental flywheel cycle(s)...")

@@ -512,7 +512,55 @@ class TestOfflineMode(unittest.IsolatedAsyncioTestCase):
             res = await rt.execute(fast_task(), "q", mode=RoutingMode.OFFLINE_ONLY)
             self.assertEqual(res.status, ResultStatus.SUCCESS)
             self.assertEqual(cloud.calls, 0)  # cloud never invoked
+
+    async def test_offline_only_keeps_local_last_resort_after_health_break(self):
+        """Repeated real timeouts trip the health circuit breaker, but in
+        OFFLINE_ONLY the local provider is the ONLY legal choice: a slow phone
+        loading a 9B model legitimately times out and is not permanently
+        broken. It must stay routable (last resort) and be REALLY attempted
+        with the long load-aware timeout; a healthy result must succeed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            make_models_dir(tmp, "local_model.gguf")
+            rt = make_router(tmp, models_dir=f"{tmp}/models")
+            cloud = StubProvider("cloud", ["c1"], local=False)
+            local = StubProvider("local_gguf", ["local_model"], local=True,
+                                 caps=("text",))
+            rt.register_provider(cloud, configured=True)
+            rt.register_provider(local, configured=True)
+            for _ in range(4):
+                rt.health.record_failure("local_gguf", timeout=True,
+                                         error="timeout")
+            self.assertEqual(rt.health.status("local_gguf").value,
+                             "UNAVAILABLE")
+            # Routing still picks local (last resort), never 'no eligible
+            # provider'.
+            sel = rt.route(fast_task(), mode=RoutingMode.OFFLINE_ONLY)
+            self.assertEqual(sel.provider, "local_gguf")
+            # Execution really attempts it once and succeeds.
+            res = await rt.execute(fast_task(), "q",
+                                   mode=RoutingMode.OFFLINE_ONLY)
+            self.assertEqual(res.status, ResultStatus.SUCCESS)
+            self.assertEqual(res.output, "stub answer")
             self.assertEqual(local.calls, 1)
+            self.assertEqual(cloud.calls, 0)  # cloud never touched
+
+    async def test_offline_only_cloud_stays_excluded_when_unavailable(self):
+        """Last-resort routing is LOCAL-only: a broken cloud provider must
+        never be resurrected by OFFLINE_ONLY mode."""
+        with tempfile.TemporaryDirectory() as tmp:
+            make_models_dir(tmp, "local_model.gguf")
+            rt = make_router(tmp, models_dir=f"{tmp}/models")
+            cloud = StubProvider("cloud", ["c1"], local=False)
+            local = StubProvider("local_gguf", ["local_model"], local=True,
+                                 caps=("text",))
+            rt.register_provider(cloud, configured=True)
+            rt.register_provider(local, configured=True)
+            for _ in range(4):
+                rt.health.record_failure("cloud", timeout=True,
+                                         error="timeout")
+            self.assertEqual(rt.health.status("cloud").value, "UNAVAILABLE")
+            sel = rt.route(fast_task(), mode=RoutingMode.OFFLINE_ONLY)
+            self.assertEqual(sel.provider, "local_gguf")  # cloud excluded
 
     async def test_offline_only_no_local_model_returns_structured_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
