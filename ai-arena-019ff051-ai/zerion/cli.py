@@ -182,6 +182,11 @@ async def _enter_interactive_chat(engine: AscendantEngine,
                 print(f"\n[ZERION] {status}"
                       + (f" — {errors}" if errors else "")
                       + " (LOCAL MODEL UNAVAILABLE — drop a .gguf into models/)")
+            # Principle 8: real user-learning signals from every turn
+            # (explicit preferences/corrections only; plain turns are neutral).
+            user_learning = getattr(runtime, "user_learning", None)
+            if user_learning is not None:
+                user_learning.observe_turn(text, out or None)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001 — a failed turn never kills runtime
@@ -209,6 +214,7 @@ async def run_cli():
     parser.add_argument("--benchmark", action="store_true", help="Run 14-category scientific benchmark suite")
     parser.add_argument("--cognitive-benchmark", action="store_true", help="Run ZERION_COGNITIVE_BENCHMARK (BASELINE vs ZERION, 10 categories, offline, deterministic)")
     parser.add_argument("--models", action="store_true", help="List locally discovered GGUF models (real file scan, honest metadata)")
+    parser.add_argument("--inference", action="store_true", help="Show the observable inference ledger (real request/result records from the cognitive runtime)")
     parser.add_argument("--ablation", action="store_true", help="Run systematic 11-subsystem ablation study")
     parser.add_argument("--trajectory", action="store_true", help="Display developmental learning trajectory")
     parser.add_argument("--reality-audit", action="store_true", help="Actually run the test suite and report real pass/fail/skip counts (never fabricated)")
@@ -408,6 +414,26 @@ async def run_cli():
                 print(f"    context={m['context_window'] or 'UNKNOWN'} "
                       f"arch={m['architecture']} quant={m['quantization']} "
                       f"caps={','.join(m['capabilities']) or 'UNKNOWN'}")
+
+        elif args.inference:
+            ledger = engine.cognitive_runtime.inference_ledger
+            s = ledger.summary()
+            print("\n=== INFERENCE LEDGER (real runtime records) ===")
+            print(f"Requests:  {s['total']}  (successes: {s['successes']}, "
+                  f"failures: {s['failures']})")
+            if s["last"] is None:
+                print("No inference has been executed yet (run the chat or a task).")
+            for req, res in zip(ledger.requests(), ledger.results()):
+                print(f"[{res.request_id}] {res.provider or 'NONE'}/"
+                      f"{res.model or 'NONE'}")
+                print(f"    input:  {req.user_input[:60]!r}")
+                print(f"    output: {res.generated_text[:60]!r}"
+                      if res.generated_text else
+                      f"    output: NONE (status={res.termination_reason}, "
+                      f"error={res.error or 'none'})")
+                print(f"    success={res.success} tokens=({res.prompt_tokens}, "
+                      f"{res.completion_tokens}) decision={res.decision} "
+                      f"({res.decision_reason})")
 
         elif args.level:
             ans = engine.answer_hierarchy_level(args.level)

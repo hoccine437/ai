@@ -315,6 +315,15 @@ class CognitiveRuntime:
         self.objectives = objectives or ObjectiveContinuityManager(
             db_path=str(self.data_dir / "continuous_objectives.db"), strict_load=True)
         self.attention = attention or AttentionEconomy(capacity_slots=3)
+        # Runtime repair: observable inference records, decision policy
+        # (principle 9) and user learning (principle 8). All three are real
+        # runtime state — never fabricated metrics.
+        from zerion.cognitive_os.decision_policy import DecisionPolicy
+        from zerion.cognitive_os.inference_ledger import InferenceLedger
+        from zerion.cognitive_os.user_learning import UserLearningStore
+        self.inference_ledger = InferenceLedger()
+        self.decision_policy = DecisionPolicy()
+        self.user_learning = UserLearningStore(data_dir=str(self.data_dir))
         # Goal ids whose attention candidate was already submitted this session
         # (dedupes CREATE -> UPDATE -> BLOCK re-events so repeated lifecycle
         # events cannot starve genuinely new candidates of compute budget).
@@ -1646,8 +1655,68 @@ class CognitiveRuntime:
         """Execute a task through the router (failover within budget policy).
         Model output is never treated as verified truth; high-risk tasks keep
         verification_status = MODEL_OUTPUT until observation confirms it."""
-        return await self.cognitive_router.execute(
+        from zerion.cognitive_os.inference_ledger import (
+            InferenceRequest,
+            InferenceResult,
+        )
+        goal_id = None
+        try:
+            active = self.objectives.list_active_objectives()
+            if active:
+                goal_id = active[0].objective_id
+        except Exception:  # noqa: BLE001 - goal lookup must never break inference
+            goal_id = None
+        context_sources = ["user_input"]
+        if goal_id is not None:
+            context_sources.append("goal")
+        req = InferenceRequest(
+            request_id=task.task_id,
+            user_input=prompt,
+            selected_model=None,
+            selected_provider=None,
+            context_sources=context_sources,
+            goal_id=goal_id,
+            cognitive_depth=getattr(getattr(task, "type", None), "value", None),
+        )
+        self.inference_ledger.record_request(req)
+
+        result = await self.cognitive_router.execute(
             task, prompt, mode=mode, selection=selection)
+        # Patch the request with the selection the router actually made.
+        self.inference_ledger.complete_request(
+            task.task_id,
+            model=getattr(result, "model", None) or None,
+            provider=getattr(result, "provider", None) or None)
+
+        # Decision policy verdict over REAL evidence (task uncertainty/stakes
+        # + whether a provider actually produced output).
+        produced = getattr(result, "output", None) is not None
+        verdict = self.decision_policy.decide(
+            uncertainty=float(getattr(task, "uncertainty", 0.0) or 0.0),
+            stakes=float(getattr(task, "stakes", 0.0) or 0.0),
+            confidence=1.0 if produced else 0.0,
+            missing_information=False,
+            permissions_allowed=True,
+            provider_available=bool(getattr(result, "provider", "")) or produced,
+        )
+        usage = getattr(result, "usage", None) or {}
+        inf_result = InferenceResult(
+            request_id=task.task_id,
+            model=getattr(result, "model", None) or None,
+            provider=getattr(result, "provider", None) or None,
+            generated_text=produced and getattr(result, "output", None) or None,
+            latency_ms=getattr(result, "latency_ms", None),
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+            termination_reason=getattr(
+                getattr(result, "status", None), "value", None),
+            success=produced,
+            error="; ".join(getattr(result, "errors", None) or []) or None,
+            decision=verdict.decision.value,
+            decision_reason=verdict.reason,
+        )
+        self.inference_ledger.record_result(inf_result)
+        return result
 
     # --- Slice 7: self-improvement gate -----------------------------------------
 

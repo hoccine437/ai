@@ -142,6 +142,23 @@ class ProviderHealthTracker:
         h.status = self._derive_status(h)
         return h
 
+    def reset(self, provider: str) -> ProviderHealth:
+        """Circuit-breaker reset: an operator acknowledges the environment was
+        fixed (e.g. a GGUF backend was installed) and clears failure history
+        so the provider can be routed again. Never fabricates success — the
+        provider returns to UNKNOWN (configured, unproven) until a real call
+        succeeds."""
+        h = self.get(provider)
+        h.total_calls = 0
+        h.successes = 0
+        h.failures = 0
+        h.timeouts = 0
+        h.consecutive_failures = 0
+        h.recent_failures = []
+        h.last_error = ""
+        h.status = self._derive_status(h)
+        return h
+
     def status(self, provider: str) -> ProviderStatus:
         return self.get(provider).status
 
