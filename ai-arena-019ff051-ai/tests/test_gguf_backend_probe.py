@@ -30,6 +30,7 @@ _GGUF_ENV_KEYS = (
     "ZERION_GGUF_PROBE_TIMEOUT", "ZERION_GGUF_PROBE_TTL",
     "ZERION_GGUF_THREADS", "ZERION_GGUF_CONTEXT", "ZERION_GGUF_MAX_TOKENS",
     "ZERION_GGUF_TEMPERATURE", "ZERION_GGUF_TIMEOUT_SECONDS",
+    "ZERION_GGUF_SERVER_URL",
 )
 
 
@@ -134,15 +135,57 @@ class _GGUFProbeTest(unittest.TestCase):
         self.assertIn("no local GGUF inference backend", report["reason"])
         self.assertIn("llama-cpp-python", report["backend"]["install_hint"])
 
-    def test_probe_failed_when_output_missing_expected_token(self):
-        """A backend that runs but does NOT produce the expected probe token
-        is FAILED — a subprocess existing is not proof of cognition."""
+    def test_probe_ready_when_output_missing_expected_token(self):
+        """A backend that runs and produces REAL usable text WITHOUT the exact
+        probe token is INFERENCE AVAILABLE, not blocked — exact-token
+        matching is only a secondary diagnostic. A subprocess that returns
+        nothing is the actual failure case (MODEL_OUTPUT_EMPTY)."""
         _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
-        self._fake_cli("printf 'WRONG ANSWER\\n'\n")
+        self._fake_cli("printf 'WRONG ANSWER but real generated text\\n'\n")
+        report = probe_local_gguf(self.models_dir)
+        self.assertEqual(report["status"], "READY")
+        self.assertEqual(report["probe"]["inference"], "VERIFIED")
+        self.assertEqual(report["probe"]["loadable"], "LOADED")
+        self.assertEqual(report["probe"]["process"], "EXITED_OK")
+        self.assertEqual(report["probe"]["model_output"], "NONEMPTY")
+        self.assertFalse(report["probe"]["probe_token_match"])
+        self.assertEqual(report["probe"]["error_class"],
+                         "MODEL_INFERENCE_AVAILABLE")
+        self.assertIsNone(report["reason"])
+
+    def test_probe_blocked_only_when_output_is_actually_empty(self):
+        """Empty output after a successful exit is the ONLY output-side
+        blocker: MODEL_OUTPUT_EMPTY with the real cause, never a fake
+        'model broken'."""
+        _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
+        self._fake_cli("printf '\\n\\n'\n")  # banners only, no content
         report = probe_local_gguf(self.models_dir)
         self.assertEqual(report["status"], "BLOCKED")
         self.assertEqual(report["probe"]["inference"], "FAILED")
-        self.assertIn("expected token", report["reason"])
+        self.assertEqual(report["probe"]["loadable"], "LOADED")
+        self.assertEqual(report["probe"]["model_output"], "EMPTY")
+        self.assertEqual(report["probe"]["error_class"], "MODEL_OUTPUT_EMPTY")
+        self.assertIn("no usable output", report["reason"])
+
+    def test_probe_normalizes_ansi_around_real_output(self):
+        """llama-cli banners may wrap the response in ANSI escape sequences;
+        normalization must strip them so real output is still recognized."""
+        _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
+        self._fake_cli(
+            "printf '\\033[32m\\033[1mZERION_LOCAL_OK\\033[0m\\n'\n")
+        report = probe_local_gguf(self.models_dir)
+        self.assertEqual(report["status"], "READY")
+        self.assertEqual(report["probe"]["inference"], "VERIFIED")
+        self.assertTrue(report["probe"]["probe_token_match"])
+        self.assertEqual(report["probe"]["probe_output"], "ZERION_LOCAL_OK")
+
+    def test_probe_normalizes_control_chars_and_formatting(self):
+        """Control chars / formatting around the response are not content and
+        must not corrupt the extracted output."""
+        from zerion.cognitive_os.gguf_backend import normalize_model_output
+        self.assertEqual(
+            normalize_model_output("\x1b[2J\x1b[H  hello \x1b[31mworld\x1b[0m \n"),
+            "hello world")
 
     def test_adaptive_probe_timeout_is_unlimited_by_default(self):
         """The probe budget is UNLIMITED by default: a first model load on a
@@ -157,6 +200,33 @@ class _GGUFProbeTest(unittest.TestCase):
         self.assertEqual(adaptive_probe_timeout(1 << 30), 600.0)
         self.assertEqual(adaptive_probe_timeout(100 << 30), 600.0)
 
+    def test_probe_timeout_env_0_none_null_unlimited_mean_unlimited(self):
+        """0 / none / null / unlimited are UNLIMITED, never a zero-second
+        kill window; non-numeric garbage also falls back to unlimited."""
+        from zerion.cognitive_os.gguf_backend import adaptive_probe_timeout
+        for value in ("0", "none", "NULL", "Unlimited", "NONE", "inf"):
+            os.environ["ZERION_GGUF_PROBE_TIMEOUT"] = value
+            self.assertIsNone(adaptive_probe_timeout(1 << 30), value)
+        os.environ["ZERION_GGUF_PROBE_TIMEOUT"] = "garbage"
+        self.assertIsNone(adaptive_probe_timeout(1 << 30))
+        os.environ["ZERION_GGUF_PROBE_TIMEOUT"] = "120"
+        self.assertEqual(adaptive_probe_timeout(1 << 30), 120.0)
+
+    def test_local_inference_timeout_env_0_none_null_unlimited(self):
+        """The local inference budget (router + provider) treats 0 / none /
+        null / unlimited as unlimited too."""
+        from zerion.cognitive_os.cognitive_router import _local_timeout_from_env
+        for value in ("0", "none", "null", "unlimited", "inf"):
+            os.environ["ZERION_GGUF_TIMEOUT_SECONDS"] = value
+            self.assertIsNone(_local_timeout_from_env(), value)
+        from zerion.model_providers.gemini_provider import LocalGGUFProvider
+        for value in ("0", "none", "null", "unlimited", "inf"):
+            os.environ["ZERION_GGUF_TIMEOUT_SECONDS"] = value
+            self.assertIsNone(LocalGGUFProvider._timeout_env(), value)
+        os.environ["ZERION_GGUF_TIMEOUT_SECONDS"] = "300"
+        self.assertEqual(_local_timeout_from_env(), 300.0)
+        self.assertEqual(LocalGGUFProvider._timeout_env(), 300.0)
+
     def test_probe_reports_the_timeout_used(self):
         _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
         self._fake_cli(self._real_shape_body())
@@ -168,6 +238,72 @@ class _GGUFProbeTest(unittest.TestCase):
         os.environ["ZERION_GGUF_PROBE_TIMEOUT"] = "240"
         report = probe_local_gguf(self.models_dir)
         self.assertEqual(report["probe"]["timeout_s"], 240.0)
+
+    def test_detect_server_backend_from_env_and_honest_blocked_probe(self):
+        """ZERION_GGUF_SERVER_URL selects the persistent-session server
+        backend; a live probe verifies real reachability + generation, so a
+        dead/misconfigured server is honestly BLOCKED (never a fake READY)."""
+        from zerion.cognitive_os.gguf_backend import LocalGGUFBackend
+        _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
+        os.environ["ZERION_GGUF_SERVER_URL"] = "http://127.0.0.1:1"
+        backend = LocalGGUFBackend.detect(requested="auto")
+        self.assertEqual(backend.kind, "server")
+        self.assertEqual(backend.server_url, "http://127.0.0.1:1")
+        # Explicit "server" mode resolves the same way.
+        backend = LocalGGUFBackend.detect(requested="server")
+        self.assertEqual(backend.kind, "server")
+        report = probe_local_gguf(self.models_dir)
+        self.assertEqual(report["backend"]["name"],
+                         "llama.cpp server (persistent session)")
+        self.assertEqual(report["probe"]["error_class"], "MODEL_LOAD_FAILURE")
+        self.assertEqual(report["status"], "BLOCKED")
+        self.assertIn("server request failed", report["reason"])
+
+    def test_probe_server_backend_ready_with_live_server(self):
+        """A real reachable llama-server-shaped endpoint yields READY through
+        the persistent-session backend (hermetic: an in-process HTTP stub)."""
+        import json as _json
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from urllib.parse import urlparse
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                if urlparse(self.path).path != "/completion":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                length = int(self.headers.get("Content-Length", 0))
+                self.rfile.read(length)
+                body = _json.dumps({
+                    "content": "ZERION_LOCAL_OK (server)",
+                    "tokens_evaluated": 10,
+                    "tokens_predicted": 4,
+                }).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):  # silence
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), _Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
+            os.environ["ZERION_GGUF_SERVER_URL"] = \
+                f"http://127.0.0.1:{server.server_port}"
+            report = probe_local_gguf(self.models_dir)
+            self.assertEqual(report["status"], "READY")
+            self.assertEqual(report["probe"]["inference"], "VERIFIED")
+            self.assertTrue(report["probe"]["probe_token_match"])
+            self.assertEqual(report["backend"]["kind"], "server")
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_probe_uses_simple_io_when_output_file_flag_rejected(self):
         """Regression (device log): post-refactor llama-cli writes 0 bytes to

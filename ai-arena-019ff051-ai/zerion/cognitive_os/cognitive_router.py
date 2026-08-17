@@ -59,8 +59,12 @@ DEFAULT_MAX_ATTEMPTS = 2
 
 
 def _local_timeout_from_env() -> Optional[float]:
-    raw = os.environ.get("ZERION_GGUF_TIMEOUT_SECONDS", "").strip()
-    if not raw:
+    """Local inference budget in seconds. None = UNLIMITED (default); an
+    explicit ZERION_GGUF_TIMEOUT_SECONDS still bounds the wait, and the
+    values 0 / none / null / unlimited all mean UNLIMITED — never an
+    artificial zero-second kill window for a slow device."""
+    raw = os.environ.get("ZERION_GGUF_TIMEOUT_SECONDS", "").strip().lower()
+    if not raw or raw in ("0", "none", "null", "unlimited", "inf"):
         return None
     try:
         return max(1.0, float(raw))

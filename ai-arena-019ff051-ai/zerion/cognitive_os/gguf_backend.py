@@ -44,6 +44,24 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 EOS_MARKERS = ("</s>", "<|endoftext|>", "<|im_end|>", "<|end|>",
                "<end_of_turn>", "<|eot_id|>", "[end of text]")
 
+# ANSI escape sequences (colors, cursor control, SGR) that llama-cli and other
+# interactive banners can emit around the real response.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+# Stray C0 control chars that are never part of model content.
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def normalize_model_output(text: str) -> str:
+    """Normalize raw model/CLI output before ANY evaluation: strip ANSI escape
+    sequences (colors, cursor movement, clear-screen) and stray control
+    characters, then trim. Banners that contain no model text remain banners;
+    the response itself is never corrupted by formatting around it."""
+    if not text:
+        return ""
+    text = _ANSI_RE.sub("", text)
+    text = _CONTROL_RE.sub("", text)
+    return text.strip()
+
 
 def is_termux() -> bool:
     """True when running under Termux (Android). Same evidence as the rest of
@@ -86,15 +104,17 @@ def adaptive_probe_timeout(size_bytes: Optional[int]) -> Optional[float]:
     FUSE-backed /storage/emulated/0 — and killing llama-cli mid-load only
     manufactures false "model broken" failures. An explicit
     ``ZERION_GGUF_PROBE_TIMEOUT`` (seconds) still bounds the wait for users
-    who want one.
+    who want one; the values ``0``, ``none``, ``null`` and ``unlimited`` all
+    mean UNLIMITED (never an artificial zero-second kill window).
     """
-    explicit = os.environ.get("ZERION_GGUF_PROBE_TIMEOUT", "").strip()
-    if explicit:
-        try:
-            return max(1.0, float(explicit))
-        except ValueError:
-            return None
-    return None
+    explicit = os.environ.get("ZERION_GGUF_PROBE_TIMEOUT", "").strip().lower()
+    if not explicit or explicit in ("0", "none", "null", "unlimited",
+                                    "inf"):
+        return None
+    try:
+        return max(1.0, float(explicit))
+    except ValueError:
+        return None
 
 
 def _slow_device_hint() -> str:
@@ -122,11 +142,23 @@ def _slow_device_hint() -> str:
 
 
 def clean_generated_text(text: str) -> str:
+    """Cut generated text at the first EOS marker and normalize it (ANSI /
+    control chars stripped, trimmed). Only real content survives — the model
+    response is never corrupted by formatting the CLI printed around it."""
     for marker in EOS_MARKERS:
         idx = text.find(marker)
         if idx != -1:
             text = text[:idx]
-    return text.strip()
+    return normalize_model_output(text)
+
+
+def _decode_bytes(raw: Any) -> str:
+    """Decode captured subprocess output robustly. Bytes are decoded with
+    errors="replace" so an undecodable byte (e.g. in a banner) can never
+    erase valid generated output; str passes through untouched."""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return raw or ""
 
 
 def _is_unknown_arg_error(proc: subprocess.CompletedProcess) -> bool:
@@ -342,16 +374,18 @@ class LlamaCppCLIBackend:
             last_arg_error: Optional[str] = None
             for cmd, output_file in variants:
                 t_start = time.perf_counter()
-                proc = subprocess.run(cmd, capture_output=True, text=True,
-                                      timeout=timeout, check=False,
-                                      stdin=subprocess.DEVNULL)
+                # Capture BYTES and decode with errors="replace": an undecodable
+                # byte in a banner must never erase valid generated output.
+                proc = subprocess.run(cmd, capture_output=True, timeout=timeout,
+                                      check=False, stdin=subprocess.DEVNULL)
+                stdout = _decode_bytes(proc.stdout)
+                stderr = _decode_bytes(proc.stderr)
                 if proc.returncode != 0:
                     elapsed_s = time.perf_counter() - t_start
                     if _is_unknown_arg_error(proc) and elapsed_s < 5.0:
-                        last_arg_error = (proc.stderr or proc.stdout
-                                          or "").strip()[:200]
+                        last_arg_error = (stderr or stdout or "").strip()[:200]
                         continue  # older build: try the next simpler variant
-                    detail = (proc.stderr or proc.stdout or "").strip()
+                    detail = (stderr or stdout or "").strip()
                     raise RuntimeError(f"exit {proc.returncode}: {detail[:200]}")
                 if output_file is not None:
                     try:
@@ -364,9 +398,9 @@ class LlamaCppCLIBackend:
                         return extract_cli_output(file_text, prompt), {}
                 # rc==0 with no usable output file: parse the captured streams
                 # (older builds and stubs still print to stdout/stderr).
-                text = extract_cli_output(proc.stdout, prompt)
+                text = extract_cli_output(stdout, prompt)
                 if not text:
-                    text = extract_cli_output(proc.stderr, prompt)
+                    text = extract_cli_output(stderr, prompt)
                 return text, {}
             raise RuntimeError("llama-cli rejected all argument forms: "
                                + (last_arg_error or "unknown error"))
@@ -375,6 +409,70 @@ class LlamaCppCLIBackend:
                 os.unlink(out_path)
             except OSError:
                 pass
+
+
+class LlamaCppServerBackend:
+    """Persistent-session backend: talks to an already-running llama.cpp
+    ``llama-server`` over its HTTP completion API (stdlib ``urllib`` only —
+    no third-party dependency).
+
+    The model is loaded ONCE by the server process; every ZERION request
+    reuses that resident model instead of paying a fresh multi-minute load
+    per turn (the CLI backend's cost on Termux). This is the recommended
+    path when a long-running server is acceptable (e.g. under
+    ``termux-wake-lock``). Enable with ``ZERION_GGUF_SERVER_URL`` (or
+    ``ZERION_GGUF_BACKEND=server``); the probe verifies real reachability
+    and real generation through it, so a dead server is never reported as
+    READY.
+    """
+
+    kind = "server"
+    display_name = "llama.cpp server (persistent session)"
+    error_label = "llama.cpp server"
+
+    def __init__(self, server_url: str):
+        self.server_url = str(server_url).rstrip("/")
+
+    def available(self) -> bool:
+        return bool(self.server_url)
+
+    def unavailable_message(self) -> str:
+        return ("llama.cpp server backend configured but unreachable "
+                f"(ZERION_GGUF_SERVER_URL={self.server_url}) — start "
+                "llama-server with the model and keep it resident")
+
+    def generate(self, model_path: str, prompt: str, *, max_tokens: int,
+                 context: int, threads: int, temperature: float,
+                 timeout_s: Optional[float]) -> Tuple[str, Dict[str, Any]]:
+        import json as _json
+        import urllib.request as _request
+
+        payload = _json.dumps({
+            "prompt": prompt,
+            "n_predict": int(max_tokens),
+            "temperature": float(temperature),
+            "n_ctx": int(context),
+            "cache_prompt": True,
+            "stop": list(EOS_MARKERS),
+        }).encode("utf-8")
+        req = _request.Request(
+            self.server_url + "/completion", data=payload,
+            headers={"Content-Type": "application/json"})
+        # None = wait as long as the server needs (unlimited by default).
+        timeout = None if timeout_s is None else float(timeout_s)
+        try:
+            with _request.urlopen(req, timeout=timeout) as resp:
+                data = _json.loads(
+                    resp.read().decode("utf-8", errors="replace"))
+        except Exception as exc:  # noqa: BLE001 — structured, never a crash
+            raise RuntimeError(f"{self.error_label} request failed: {exc}") from exc
+        content = data.get("content") or ""
+        text = normalize_model_output(clean_generated_text(content))
+        if not text:
+            raise RuntimeError(
+                f"{self.error_label} returned empty content")
+        return text, {"prompt_tokens": data.get("tokens_evaluated"),
+                      "completion_tokens": data.get("tokens_predicted")}
 
 
 class UnsupportedBackend:
@@ -405,11 +503,14 @@ class LocalGGUFBackend:
     @classmethod
     def detect(cls, requested: str = "auto",
                python_available: Optional[Callable[[], bool]] = None,
-               find_cli: Optional[Callable[[], Optional[str]]] = None
+               find_cli: Optional[Callable[[], Optional[str]]] = None,
+               server_url: Optional[str] = None
                ) -> Optional[object]:
         req = (requested or "auto").strip().lower()
         if req in ("none", "off", "disabled"):
             return None
+        server = (server_url if server_url is not None
+                  else os.environ.get("ZERION_GGUF_SERVER_URL", "").strip())
         py = python_available or _real_python_available
         cli = find_cli or _real_find_cli
         if req in ("python", "py", "llama-cpp-python", "llama_cpp"):
@@ -421,7 +522,17 @@ class LocalGGUFBackend:
             return UnsupportedBackend(
                 reason="ZERION_GGUF_BACKEND=cli but no llama-cli/main found "
                        "on PATH (set ZERION_GGUF_CLI to a llama.cpp binary)")
-        # auto: python backend first, then the CLI binary, then honest NONE.
+        if req in ("server", "llama-server"):
+            if server:
+                return LlamaCppServerBackend(server)
+            return UnsupportedBackend(
+                reason="ZERION_GGUF_BACKEND=server but ZERION_GGUF_SERVER_URL "
+                       "is not set (start llama-server and point it here)")
+        # auto: a configured persistent server wins (model loaded once),
+        # then the in-process python backend, then the CLI binary, then
+        # honest NONE.
+        if server:
+            return LlamaCppServerBackend(server)
         if py():
             return LlamaCppPythonBackend(python_available=py)
         path = cli()
@@ -435,8 +546,21 @@ class LocalGGUFBackend:
 def probe_backend(backend: object, model_path: str, *,
                   timeout_s: Optional[float] = None,
                   probe_prompt: str = PROBE_PROMPT) -> Dict[str, Any]:
-    """Real load + real generation against the actual model file. VERIFIED
-    only when the generated output actually contains the expected token."""
+    """Real load + real generation against the actual model file.
+
+    Structured lifecycle (never a single opaque pass/fail):
+
+        MODEL_DISCOVERED -> MODEL_LOADABLE -> MODEL_PROCESS_STARTED ->
+        MODEL_INFERENCE_RESPONDED -> MODEL_OUTPUT_NONEMPTY ->
+        MODEL_PROBE_TOKEN_MATCH (optional secondary diagnostic)
+
+    VERIFIED requires REAL usable model output: the backend process started,
+    exited successfully, and returned non-empty text after normalization
+    (banners/ANSI/stats footers stripped). Exact-token matching is retained
+    ONLY as an optional secondary diagnostic (``probe_token_match``) — a
+    model that generates real text without the exact token is inference-
+    available, not blocked.
+    """
     t0 = time.perf_counter()
     threads = _int_env("ZERION_GGUF_THREADS", 0)
     if threads <= 0:
@@ -447,16 +571,34 @@ def probe_backend(backend: object, model_path: str, *,
             context=_int_env("ZERION_GGUF_CONTEXT", 512),
             threads=threads, temperature=0.0, timeout_s=timeout_s)
         latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
-        ok = bool(text) and PROBE_TOKEN in text
+        text = normalize_model_output(text or "")
+        token_match = bool(text) and PROBE_TOKEN in text
+        if text:
+            return {
+                "loadable": "LOADED",
+                "process": "EXITED_OK",
+                "inference": "VERIFIED",
+                "model_output": "NONEMPTY",
+                "probe_token_match": bool(token_match),
+                "probe_prompt": probe_prompt,
+                "probe_output": text[:200],
+                "probe_latency_ms": latency_ms,
+                "error_class": "MODEL_INFERENCE_AVAILABLE",
+                "error": None,
+            }
         return {
             "loadable": "LOADED",
-            "inference": "VERIFIED" if ok else "FAILED",
+            "process": "EXITED_OK",
+            "inference": "FAILED",
+            "model_output": "EMPTY",
+            "probe_token_match": False,
             "probe_prompt": probe_prompt,
-            "probe_output": (text or "")[:200],
+            "probe_output": None,
             "probe_latency_ms": latency_ms,
-            "error": None if ok else (
-                f"probe output did not contain expected token "
-                f"{PROBE_TOKEN!r} (got {text[:120]!r})"),
+            "error_class": "MODEL_OUTPUT_EMPTY",
+            "error": ("model process started and exited successfully but "
+                       "produced no usable output (empty, or only banners / "
+                       "ANSI / stats footers)"),
         }
     except subprocess.TimeoutExpired as exc:
         # A timeout is NOT the same as a crash: the backend was still alive,
@@ -465,20 +607,35 @@ def probe_backend(backend: object, model_path: str, *,
         return {
             "loadable": "TIMEOUT",
             "inference": "NOT_VERIFIED",
+            "process": "STILL_ALIVE",
+            "model_output": "NOT_VERIFIED",
+            "probe_token_match": False,
             "probe_prompt": probe_prompt,
             "probe_output": None,
             "probe_latency_ms": round((time.perf_counter() - t0) * 1000.0, 1),
+            "error_class": "MODEL_PROCESS_TIMEOUT",
             "error": (f"TimeoutExpired after {timeout_s:.0f}s (backend was "
                       f"still loading/generating) — {_slow_device_hint()}"),
         }
     except Exception as exc:  # noqa: BLE001 — structured, never a crash
+        # A nonzero subprocess exit is a PROCESS failure; anything else that
+        # prevented execution is a LOAD/execution failure. Both keep the real
+        # cause in ``error`` — never a generic "model broken".
+        msg = f"{type(exc).__name__}: {str(exc)[:300]}"
+        error_class = ("MODEL_PROCESS_FAILURE"
+                       if isinstance(exc, RuntimeError) and "exit " in str(exc)
+                       else "MODEL_LOAD_FAILURE")
         return {
             "loadable": "FAILED",
             "inference": "NOT_VERIFIED",
+            "process": "FAILED",
+            "model_output": "NOT_VERIFIED",
+            "probe_token_match": False,
             "probe_prompt": probe_prompt,
             "probe_output": None,
             "probe_latency_ms": round((time.perf_counter() - t0) * 1000.0, 1),
-            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+            "error_class": error_class,
+            "error": msg,
         }
 
 
@@ -489,14 +646,19 @@ def _backend_report(backend: Optional[object],
                 "kind": "none",
                 "detail": "ZERION_GGUF_BACKEND=none (disabled)",
                 "install_hint": None}
+    kind = getattr(backend, "kind", "none")
+    if kind == "cli":
+        detail = getattr(backend, "cli_path", None)
+    elif kind == "server":
+        detail = getattr(backend, "server_url", None)
+    else:
+        detail = getattr(backend, "unavailable_message", lambda: "")()
     return {
         "requested": requested,
         "name": getattr(backend, "display_name", "NONE"),
         "available": bool(backend.available()),
-        "kind": getattr(backend, "kind", "none"),
-        "detail": (getattr(backend, "cli_path", None)
-                   if getattr(backend, "kind", "") == "cli"
-                   else getattr(backend, "unavailable_message", lambda: "")()),
+        "kind": kind,
+        "detail": detail,
         "install_hint": (backend.unavailable_message()
                          if not backend.available() else None),
     }
@@ -593,7 +755,8 @@ def probe_local_gguf(models_dir: str, *, timeout_s: Optional[float] = None
             "probe": probe,
             "status": "READY" if verified else "BLOCKED",
             "reason": None if verified else (
-                probe.get("error") or "inference probe failed")}
+                probe.get("error") or "inference probe failed"),
+            "error_class": probe.get("error_class")}
 
 
 # -- tunables ----------------------------------------------------------------

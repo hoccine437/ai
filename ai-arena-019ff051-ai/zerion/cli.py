@@ -114,8 +114,15 @@ async def _enter_interactive_chat(engine: AscendantEngine,
     if tts.get("reason"):
         tts_line = f"{tts_line} ({tts['reason']})"
 
+    # Canonical ZERION identity from the real IdentityCore — never a hard-
+    # coded persona line. The local model is only the reasoning engine.
+    identity_core = getattr(engine, "identity", None)
+    system_name = getattr(identity_core, "system_name", "ZERION")
+    invariants = getattr(identity_core, "invariants", None) or []
     print("\nZERION X")
     print("────────────────────────────────")
+    print(f"IDENTITY    {system_name}")
+    print(f"CONSTITUTION {len(invariants)} INVARIANT LAWS (INV-001..INV-010)")
     print(f"MODE        {r.get('mode', 'LOCAL')} OFFLINE")
     print("INPUT       TEXT")
     print("VOICE       OUTPUT ONLY")
@@ -178,24 +185,12 @@ async def _enter_interactive_chat(engine: AscendantEngine,
             break
         try:
             print("[ZERION] THINKING...")
-            # Real remembered context: instructions the user gave (their own
-            # words, from the persistent UserLearningStore) are injected into
-            # the prompt so the model can actually retrieve them. Without
-            # signals the prompt is exactly the user's text.
+            # The user's exact words go to the runtime verbatim. The ZERION
+            # identity layer inside execute_task injects remembered context
+            # (user learning, relevant memory, capabilities, constitution)
+            # dynamically, so the raw text also reaches the tool router's
+            # deterministic FAST-FIELD detection unchanged.
             prompt_text = text
-            try:
-                user_learning = getattr(runtime, "user_learning", None)
-                signals = (user_learning.learned_preferences()
-                           if user_learning is not None else [])
-                if signals:
-                    lines = [f"- {s.snippet}" for s in signals[-5:]]
-                    prompt_text = (
-                        "User instructions Zerion has learned (the user's own "
-                        "words; use as context):\n"
-                        + "\n".join(lines)
-                        + "\n\nUser message: " + text)
-            except Exception:  # noqa: BLE001 — context injection never breaks a turn
-                prompt_text = text
             task = Task(
                 type=TaskType.CONVERSATION,
                 description=f"User message: {text[:200]}",

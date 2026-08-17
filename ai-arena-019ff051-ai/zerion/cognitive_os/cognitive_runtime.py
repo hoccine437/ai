@@ -307,9 +307,19 @@ class CognitiveRuntime:
                  stale_event_window_s: float = 60.0,
                  experiment_permissions: Optional[ExperimentPermissions] = None,
                  models_dir: Optional[str] = None,
-                 security: Optional[Any] = None):
+                 security: Optional[Any] = None,
+                 identity: Optional[Any] = None,
+                 self_model: Optional[Any] = None,
+                 readiness: Optional[Callable[[], Dict[str, Any]]] = None):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        # Engine-owned sources the runtime may draw on for the ZERION
+        # identity layer (canonical IdentityCore, self-model capability
+        # catalog, live readiness probe). Optional: the runtime stays
+        # functional standalone with its own registries.
+        self._identity = identity
+        self._self_model = self_model
+        self._readiness = readiness
 
         self.event_bus = event_bus or AsyncEventBus(db_path=str(self.data_dir / "cognitive_events.db"))
         self.objectives = objectives or ObjectiveContinuityManager(
@@ -422,6 +432,20 @@ class CognitiveRuntime:
                               discovery=self.local_models),
             configured=True,   # discovery exists and is real
             integration_implemented=True)
+
+        # ZERION runtime identity & tool layer. The local model is only the
+        # reasoning engine; these own the identity/context, the executable
+        # tool registry and the bounded self-critic for the live loop.
+        from zerion.cognitive_os.zerion_context import ZerionRuntimeContext
+        from zerion.cognitive_os.tool_router import ZerionToolRouter
+        from zerion.cognitive_os.self_critic import ZerionSelfCritic
+        self.zerion_context = ZerionRuntimeContext(
+            self, identity=self._identity, self_model=self._self_model,
+            readiness=self._readiness)
+        self.tool_router = ZerionToolRouter(
+            self, identity=self._identity, self_model=self._self_model,
+            readiness=self._readiness)
+        self.self_critic = ZerionSelfCritic(self)
 
         # Slice 7: self-improvement gate. Real telemetry -> evidence-required
         # bottleneck detection -> improvement proposals -> static analysis /
@@ -1652,13 +1676,28 @@ class CognitiveRuntime:
     async def execute_task(self, task: Task, prompt: str,
                            mode: RoutingMode = RoutingMode.AUTO,
                            selection: Optional[ModelSelection] = None) -> CognitiveResult:
-        """Execute a task through the router (failover within budget policy).
-        Model output is never treated as verified truth; high-risk tasks keep
-        verification_status = MODEL_OUTPUT until observation confirms it."""
+        """THE canonical live conversation path (CLI / UI / voice all route
+        here). ZERION owns the loop; the local model (Qwen GGUF) is only the
+        reasoning engine underneath:
+
+            USER INPUT -> ZERION CONTEXT (identity/constitution/cognition/
+            memory/capabilities/tools) -> intent + goal analysis ->
+            [tool fast path] OR model -> [model tool call -> execute] ->
+            self-critic (accept / revise / retry / escalate) -> memory
+            update -> ZERION RESPONSE
+
+        - The bounded identity context is injected before EVERY model call.
+        - The tool router never advertises a tool that is not executable.
+        - Self-critique is bounded (1 revision max) — unlimited inference
+          time per call, no runaway loops.
+        - Every turn updates episodic memory; model output is never verified
+          truth (verification_status = MODEL_OUTPUT until observed)."""
         from zerion.cognitive_os.inference_ledger import (
             InferenceRequest,
             InferenceResult,
         )
+        from zerion.cognitive_os.self_critic import SelfCriticDecision
+        t0 = time.perf_counter()
         goal_id = None
         try:
             active = self.objectives.list_active_objectives()
@@ -1666,7 +1705,7 @@ class CognitiveRuntime:
                 goal_id = active[0].objective_id
         except Exception:  # noqa: BLE001 - goal lookup must never break inference
             goal_id = None
-        context_sources = ["user_input"]
+        context_sources = ["user_input", "identity", "constitution", "memory"]
         if goal_id is not None:
             context_sources.append("goal")
         req = InferenceRequest(
@@ -1680,16 +1719,179 @@ class CognitiveRuntime:
         )
         self.inference_ledger.record_request(req)
 
+        # 1) ZERION identity / system context (size-bounded, dynamic
+        #    retrieval: memory and capabilities are pulled from real stores).
+        field = None
+        try:
+            field = self.cognitive_router.selector.depth.field(task)
+        except Exception:  # noqa: BLE001 — depth must never break a turn
+            field = None
+        try:
+            tool_meta = [{"name": n, "description": d}
+                         for n, d in self.tool_router.describe_pairs()]
+        except Exception:  # noqa: BLE001
+            tool_meta = []
+        system_context = self.zerion_context.build_system_prompt(
+            prompt, task=task,
+            field=getattr(field, "value", None) if field else None,
+            tools=tool_meta)
+        full_prompt = system_context + "\n\nUser: " + prompt
+
+        # 2) FAST FIELD: deterministic local tool routing (no model tokens).
+        tool_name = None
+        try:
+            tool_name = self.tool_router.detect(prompt)
+        except Exception:  # noqa: BLE001 — detection never breaks a turn
+            tool_name = None
+        if tool_name is not None:
+            tool_result = await self.tool_router.execute(tool_name, prompt)
+            result = self._tool_result_to_cognitive(task, tool_result, mode,
+                                                    t0)
+            self._record_conversation_episode(task, prompt, result)
+            self._finish_execute_task(task, prompt, result, goal_id,
+                                      decision="local_tool")
+            return result
+
+        # 3) MODEL call with the ZERION context (Qwen is the engine, ZERION
+        #    is the identity; unlimited inference time for local models).
         result = await self.cognitive_router.execute(
-            task, prompt, mode=mode, selection=selection)
-        # Patch the request with the selection the router actually made.
+            task, full_prompt, mode=mode, selection=selection)
+
+        # 4) DEEP FIELD: a model-requested tool call is executed against the
+        #    real registry, then the model produces the final response with
+        #    the tool result. Bounded to ONE tool call per turn.
+        if result.status == ResultStatus.SUCCESS and result.output:
+            parsed = self.tool_router.parse_model_tool_call(result.output)
+            if parsed is not None:
+                name, arg = parsed
+                tool_result = await self.tool_router.execute(name, arg or prompt)
+                result.metadata["tool_used"] = name
+                if not tool_result.ok:
+                    # Never fabricate execution: keep the honest failure in
+                    # the result metadata and let the final response report it.
+                    result.metadata["tool_error"] = tool_result.error
+                else:
+                    second = await self.cognitive_router.execute(
+                        task,
+                        full_prompt
+                        + "\n\nTool result:\n" + tool_result.output
+                        + "\n\nRespond to the user as ZERION with the final "
+                          "answer based on that tool result.",
+                        mode=mode)
+                    if getattr(second, "output", None):
+                        result = second
+                        result.metadata["tool_used"] = name
+                        result.metadata["tool_success"] = True
+                    else:
+                        # The tool ran; the final phrasing call failed.
+                        # Report the tool result honestly instead of silence.
+                        result.metadata["tool_success"] = True
+                        result.metadata["tool_result"] = tool_result.output[:500]
+
+        # 5) Self-critic: bounded ACCEPT / REVISE / RETRY / ESCALATE.
+        revisions = 0
+        while revisions <= self.self_critic.max_revisions:
+            decision, note, _revised = await self.self_critic.review(
+                task, result, user_text=prompt, revisions_used=revisions)
+            result.metadata.setdefault("self_critic", []).append(
+                {"decision": decision, "note": note})
+            if decision in (SelfCriticDecision.ACCEPT,
+                            SelfCriticDecision.ESCALATE):
+                break
+            if decision == SelfCriticDecision.RETRY:
+                result = await self.cognitive_router.execute(
+                    task, full_prompt, mode=mode, selection=selection)
+                revisions += 1
+                continue
+            if decision == SelfCriticDecision.REVISE:
+                revised = await self.self_critic.critique(
+                    task, result, full_prompt=full_prompt)
+                if revised:
+                    result.output = revised
+                    result.metadata["self_critic_revised"] = True
+                revisions += 1
+                continue
+
+        # 6) Memory update: this turn becomes a real episodic record.
+        self._record_conversation_episode(task, prompt, result)
+
+        # 7) Ledger + decision policy over REAL evidence.
+        self._finish_execute_task(task, prompt, result, goal_id,
+                                  decision="decision_policy")
+        return result
+
+    # -- execute_task helpers -------------------------------------------------
+
+    def _tool_result_to_cognitive(self, task: Task, tool_result: Any,
+                                  mode: RoutingMode, t0: float) -> CognitiveResult:
+        """Wrap a real tool execution in a CognitiveResult (provider is the
+        local tool registry, never a faked model)."""
+        usage = {"provider": "local_tool", "tool": tool_result.tool,
+                 "timestamp": time.time()}
+        if tool_result.ok:
+            return CognitiveResult(
+                task_id=task.task_id, provider="local_tool",
+                model=f"tool:{tool_result.tool}",
+                output=tool_result.output,
+                latency_ms=round((time.perf_counter() - t0) * 1000.0, 2),
+                usage=usage, status=ResultStatus.SUCCESS,
+                verification_required=task.verification_required,
+                verification_status=VerificationStatus.MODEL_OUTPUT,
+                confidence=1.0, mode=mode,
+                metadata={"tool": tool_result.tool,
+                          "routing_policy_version": 0})
+        return CognitiveResult(
+            task_id=task.task_id, provider="local_tool",
+            model=f"tool:{tool_result.tool}",
+            output=None, latency_ms=round((time.perf_counter() - t0) * 1000.0, 2),
+            usage=usage, status=ResultStatus.PROVIDER_UNAVAILABLE,
+            errors=[tool_result.error or "tool execution failed"],
+            verification_required=task.verification_required,
+            verification_status=VerificationStatus.MODEL_OUTPUT,
+            confidence=0.0, mode=mode,
+            metadata={"tool": tool_result.tool})
+
+    def _record_conversation_episode(self, task: Task, prompt: str,
+                                     result: CognitiveResult) -> None:
+        """Persist the turn as a real episodic memory record (bounded size,
+        best-effort — a memory write must never break a turn)."""
+        try:
+            from zerion.cognitive_os.episode import (
+                EpisodeMode,
+                EpisodeStatus,
+                ExperienceEpisode,
+            )
+            output = getattr(result, "output", None) or ""
+            tools_used = (str(result.metadata.get("tool", ""))
+                          or str(result.metadata.get("tool_used", ""))
+                          or str(getattr(result, "model", "") or ""))
+            episode = ExperienceEpisode(
+                context=f"user message: {prompt[:300]}",
+                mode=EpisodeMode.OBSERVED,
+                status=EpisodeStatus.COMPLETED,
+                success=bool(output),
+                actions=[{"action": "conversation_turn",
+                          "detail": prompt[:200]}],
+                outcomes=[{"outcome": ("model_response" if output
+                                       else "no_response"),
+                           "detail": str(output)[:200]}],
+                capabilities_used=[tools_used] if tools_used
+                else ["conversation"],
+            )
+            self.episode_store.put(episode)
+        except Exception:  # noqa: BLE001 — memory update never breaks a turn
+            pass
+
+    def _finish_execute_task(self, task: Task, prompt: str,
+                             result: CognitiveResult, goal_id: Optional[str],
+                             decision: str) -> None:
+        """Shared ledger tail: complete the request record and write the
+        observable InferenceResult over REAL evidence."""
+        from zerion.cognitive_os.inference_ledger import InferenceResult
         self.inference_ledger.complete_request(
             task.task_id,
             model=getattr(result, "model", None) or None,
             provider=getattr(result, "provider", None) or None)
-
-        # Decision policy verdict over REAL evidence (task uncertainty/stakes
-        # + whether a provider actually produced output).
         produced = getattr(result, "output", None) is not None
         verdict = self.decision_policy.decide(
             uncertainty=float(getattr(task, "uncertainty", 0.0) or 0.0),
@@ -1716,8 +1918,6 @@ class CognitiveRuntime:
             decision_reason=verdict.reason,
         )
         self.inference_ledger.record_result(inf_result)
-        return result
-
     # --- Slice 7: self-improvement gate -----------------------------------------
 
     def record_telemetry(self, component: str, metric: str, *,

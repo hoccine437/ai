@@ -334,8 +334,13 @@ class VoiceFirstInteractionPipeline:
                 except Exception:  # noqa: BLE001
                     accel = None
             accel_str = (f"{accel:.2f}x" if accel is not None else "UNKNOWN")
+            # Identity comes from the canonical IdentityCore (ZERION owns the
+            # identity; the local model is only the reasoning engine).
+            system_name = getattr(
+                getattr(self.engine, "identity", None), "system_name", "ZERION")
             cognitive_answer = (
-                f"I am ZERION. Cognitive maturity: {mat.current_level.value}. "
+                f"I am {system_name}, an autonomous developmental cognitive "
+                f"system. Cognitive maturity: {mat.current_level.value}. "
                 f"Learning acceleration: {accel_str}. "
                 f"Active objectives: "
                 f"{len(self.engine.continuous_objectives.list_active_objectives())}.")

@@ -316,6 +316,11 @@ class AscendantEngine:
             # The canonical security boundary gates self-modification approval
             # (SYSTEM_MUTATE is never held by default -> denials are honest).
             security=self.security,
+            # ZERION identity layer: the runtime draws the canonical identity,
+            # the real capability catalog and live readiness from the engine.
+            identity=self.identity,
+            self_model=self.self_model,
+            readiness=self.local_readiness,
         )
         # Slice 10: the visualization state adapter is the only channel between
         # the runtime and the UI; commands go through the validated CommandAPI.

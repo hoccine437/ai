@@ -207,6 +207,8 @@ class LegacyGGUFAdapter:
         """Which GGUF runtime actually exists to run inference. Evidence-based
         (import spec + PATH probe), never assumed from configuration."""
         info = getattr(self._legacy, "backend_info", lambda: {})()
+        if info.get("server"):
+            return f"llama.cpp server ({info['server']})"
         if info.get("python_backend"):
             return "llama-cpp-python"
         if info.get("cli"):

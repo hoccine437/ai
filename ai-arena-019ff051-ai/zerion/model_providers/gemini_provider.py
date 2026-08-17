@@ -105,6 +105,8 @@ class LocalGGUFProvider(ModelProvider):
             return self.BACKEND_PYTHON
         if env in ("cli", "llama-cli", "main"):
             return self.BACKEND_CLI
+        if env in ("server", "llama-server"):
+            return "server"
         if env in ("none", "off", "disabled"):
             return self.BACKEND_NONE
         return self.backend
@@ -156,12 +158,15 @@ class LocalGGUFProvider(ModelProvider):
         if backend is None:
             info["python_backend"] = False
             info["cli"] = None
+            info["server"] = None
             info["install_hint"] = "local GGUF inference disabled " \
                                    "(ZERION_GGUF_BACKEND=none)"
             return info
         info["python_backend"] = bool(backend.kind == "python")
         info["cli"] = getattr(backend, "cli_path", None) \
             if backend.kind == "cli" else None
+        info["server"] = getattr(backend, "server_url", None) \
+            if backend.kind == "server" else None
         info["name"] = backend.display_name
         info["available"] = bool(backend.available())
         if not backend.available():
@@ -288,10 +293,12 @@ class LocalGGUFProvider(ModelProvider):
 
     @staticmethod
     def _timeout_env() -> Optional[float]:
-        """Local inference budget in seconds. None = unlimited (default); an
-        explicit ZERION_GGUF_TIMEOUT_SECONDS still bounds the wait."""
-        raw = os.environ.get("ZERION_GGUF_TIMEOUT_SECONDS", "").strip()
-        if not raw:
+        """Local inference budget in seconds. None = UNLIMITED (default); an
+        explicit ZERION_GGUF_TIMEOUT_SECONDS still bounds the wait, and the
+        values ``0``, ``none``, ``null`` and ``unlimited`` all mean UNLIMITED
+        — never an artificial zero-second kill window for a slow phone."""
+        raw = os.environ.get("ZERION_GGUF_TIMEOUT_SECONDS", "").strip().lower()
+        if not raw or raw in ("0", "none", "null", "unlimited", "inf"):
             return None
         try:
             return max(1.0, float(raw))
