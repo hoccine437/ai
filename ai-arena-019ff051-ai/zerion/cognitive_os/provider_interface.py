@@ -111,7 +111,9 @@ class ProviderCall:
     task: Task
     prompt: str
     model_id: str
-    timeout_s: float = 30.0
+    # None = wait as long as it takes (the local GGUF default); an explicit
+    # budget still bounds the call.
+    timeout_s: Optional[float] = None
     max_tokens: Optional[int] = None
     temperature: Optional[float] = None
     metadata: Dict[str, Any] = field(default_factory=dict)

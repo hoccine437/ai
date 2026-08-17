@@ -35,6 +35,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -77,29 +78,28 @@ PROBE_PROMPT = "Reply with exactly: ZERION_LOCAL_OK"
 PROBE_TOKEN = "ZERION_LOCAL_OK"
 
 
-def adaptive_probe_timeout(size_bytes: Optional[int]) -> float:
-    """Probe budget scaled to the actual model file size.
+def adaptive_probe_timeout(size_bytes: Optional[int]) -> Optional[float]:
+    """Probe budget for a real load + generation probe.
 
-    A 9B Q2_K model is ~3.4 GiB; on Android/Termux the model usually lives on
-    /storage/emulated/0, which is FUSE-backed, so the first read/mmap can take
-    minutes and would exceed any fixed short timeout — killing llama-cli
-    mid-load and reporting a false failure. Budget 90 s per GiB (floor 120 s,
-    cap 1800 s) so a real probe can actually finish. An explicit
-    ``ZERION_GGUF_PROBE_TIMEOUT`` always overrides.
+    Default: UNLIMITED. A first model load on a phone (Termux) can
+    legitimately take many minutes — especially for a 9B-class file on
+    FUSE-backed /storage/emulated/0 — and killing llama-cli mid-load only
+    manufactures false "model broken" failures. An explicit
+    ``ZERION_GGUF_PROBE_TIMEOUT`` (seconds) still bounds the wait for users
+    who want one.
     """
     explicit = os.environ.get("ZERION_GGUF_PROBE_TIMEOUT", "").strip()
     if explicit:
         try:
             return max(1.0, float(explicit))
         except ValueError:
-            pass
-    size_gb = max(0.0, (size_bytes or 0) / (1024 ** 3))
-    return min(1800.0, max(120.0, 90.0 * size_gb))
+            return None
+    return None
 
 
 def _slow_device_hint() -> str:
-    """Actionable guidance when a large model cannot load within budget on
-    constrained hardware (S21 FE-class phones running Termux)."""
+    """Actionable guidance when a large model cannot load within a timeout
+    budget on constrained hardware (S21 FE-class phones running Termux)."""
     parts = [
         "the model file is very large for this device and the first load can "
         "take minutes (this is a real load, not a hang)",
@@ -111,10 +111,10 @@ def _slow_device_hint() -> str:
             "/storage/emulated/0 load much slower because that path is "
             "FUSE-backed")
         parts.append(
-            "allow more time with ZERION_GGUF_PROBE_TIMEOUT / "
-            "ZERION_GGUF_TIMEOUT_SECONDS, shrink the KV cache with "
-            "ZERION_GGUF_CONTEXT=512, or try ZERION_GGUF_NO_MMAP=1 (buffered "
-            "I/O instead of mmap)")
+            "timeouts are unlimited by default; if you set a budget, raise "
+            "or unset ZERION_GGUF_PROBE_TIMEOUT / ZERION_GGUF_TIMEOUT_SECONDS, "
+            "shrink the KV cache with ZERION_GGUF_CONTEXT=512, or try "
+            "ZERION_GGUF_NO_MMAP=1 (buffered I/O instead of mmap)")
         parts.append(
             "on 6-8 GB phones prefer a ~1-2 GB model (3B-class Q4_K_M) over "
             "a 9B Q2_K")
@@ -127,6 +127,19 @@ def clean_generated_text(text: str) -> str:
         if idx != -1:
             text = text[:idx]
     return text.strip()
+
+
+def _is_unknown_arg_error(proc: subprocess.CompletedProcess) -> bool:
+    """True when llama-cli failed because it does not understand one of our
+    CLI flags (e.g. ``-o`` / ``--simple-io`` on a pre-refactor build), so the
+    caller can retry with a simpler argument form. Argument parsing happens
+    before any model load, so a failed variant is cheap."""
+    blob = f"{proc.stderr or ''}\n{proc.stdout or ''}".lower()
+    return ("unknown argument" in blob
+            or "unrecognized argument" in blob
+            or "unknown option" in blob
+            or "unrecognized option" in blob
+            or "invalid option" in blob)
 
 
 def extract_cli_output(stdout: str, prompt: str) -> str:
@@ -245,9 +258,16 @@ class LlamaCppPythonBackend:
 
 class LlamaCppCLIBackend:
     """llama.cpp CLI binary on PATH (the Termux/Android path). Single-shot
-    invocation only: ``-no-cnv -st`` and stdin from /dev/null, so a TTY can
-    never trap it in interactive mode (which previously made it echo ``> ``.
-    prompts forever instead of returning generated text)."""
+    invocation only: ``-st`` and stdin from /dev/null, so a TTY can never
+    trap it in interactive mode (which previously made it echo ``> ``
+    prompts forever instead of returning generated text).
+
+    Generated text is captured via ``-o <file>`` (``--output-file``) with
+    ``--simple-io``: post-refactor llama-cli (2025+) no longer routes
+    generation to a redirected stdout — the banner/echo/generation go to the
+    terminal and stdout comes back empty. Older binaries that reject those
+    flags fall back to plain single-shot invocation and parse the captured
+    streams."""
 
     kind = "cli"
     display_name = "llama.cpp CLI"
@@ -267,8 +287,8 @@ class LlamaCppCLIBackend:
 
     def generate(self, model_path: str, prompt: str, *, max_tokens: int,
                  context: int, threads: int, temperature: float,
-                 timeout_s: float) -> Tuple[str, Dict[str, Any]]:
-        cmd = [
+                 timeout_s: Optional[float]) -> Tuple[str, Dict[str, Any]]:
+        base = [
             self.cli_path, "-m", str(model_path), "-p", prompt,
             "-n", str(max_tokens), "-c", str(context), "-t", str(threads),
             "--temp", str(temperature), "--no-display-prompt",
@@ -279,14 +299,61 @@ class LlamaCppCLIBackend:
             # it are very slow, so reading the file with buffered I/O is often
             # much faster. Needs free RAM ~= model size (fine on 8 GB phones
             # for ≤4 GiB models; opt-in for exactly this reason).
-            cmd.append("--no-mmap")
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=timeout_s, check=False,
-                              stdin=subprocess.DEVNULL)
-        if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "").strip()
-            raise RuntimeError(f"exit {proc.returncode}: {detail[:200]}")
-        return extract_cli_output(proc.stdout, prompt), {}
+            base.append("--no-mmap")
+        # None = wait as long as it takes (unlimited by default); an explicit
+        # budget still bounds the subprocess.
+        timeout = None if timeout_s is None else float(timeout_s)
+
+        # Post-refactor llama-cli (2025+) no longer routes generated text to a
+        # redirected stdout — the banner/echo/generation go to the terminal
+        # and stdout comes back empty (observed on Termux: the probe saw ''
+        # while the model really did generate). The officially supported
+        # capture is `-o <file>`; `--simple-io` is the subprocess-mode IO
+        # flag. Older binaries reject these, so retry without them when the
+        # binary reports an unknown argument (argument parsing happens before
+        # any model load, so a failed variant is cheap).
+        fd, out_path = tempfile.mkstemp(prefix="zerion_gguf_", suffix=".txt")
+        os.close(fd)
+        try:
+            variants: List[Tuple[List[str], Optional[str]]] = [
+                (base + ["-o", out_path, "--simple-io"], out_path),
+                (base + ["-o", out_path], out_path),
+                (base, None),
+            ]
+            last_arg_error: Optional[str] = None
+            for cmd, output_file in variants:
+                proc = subprocess.run(cmd, capture_output=True, text=True,
+                                      timeout=timeout, check=False,
+                                      stdin=subprocess.DEVNULL)
+                if proc.returncode != 0:
+                    if _is_unknown_arg_error(proc):
+                        last_arg_error = (proc.stderr or proc.stdout
+                                          or "").strip()[:200]
+                        continue  # older build: try the next simpler variant
+                    detail = (proc.stderr or proc.stdout or "").strip()
+                    raise RuntimeError(f"exit {proc.returncode}: {detail[:200]}")
+                if output_file is not None:
+                    try:
+                        with open(output_file, "r", encoding="utf-8",
+                                  errors="replace") as f:
+                            file_text = f.read()
+                    except OSError:
+                        file_text = ""
+                    if file_text.strip():
+                        return extract_cli_output(file_text, prompt), {}
+                # rc==0 with no usable output file: parse the captured streams
+                # (older builds and stubs still print to stdout/stderr).
+                text = extract_cli_output(proc.stdout, prompt)
+                if not text:
+                    text = extract_cli_output(proc.stderr, prompt)
+                return text, {}
+            raise RuntimeError("llama-cli rejected all argument forms: "
+                               + (last_arg_error or "unknown error"))
+        finally:
+            try:
+                os.unlink(out_path)
+            except OSError:
+                pass
 
 
 class UnsupportedBackend:
@@ -345,7 +412,7 @@ class LocalGGUFBackend:
 # -- the canonical lifecycle probe -------------------------------------------
 
 def probe_backend(backend: object, model_path: str, *,
-                  timeout_s: float = 120.0,
+                  timeout_s: Optional[float] = None,
                   probe_prompt: str = PROBE_PROMPT) -> Dict[str, Any]:
     """Real load + real generation against the actual model file. VERIFIED
     only when the generated output actually contains the expected token."""

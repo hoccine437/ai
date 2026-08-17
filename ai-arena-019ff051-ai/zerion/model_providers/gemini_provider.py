@@ -231,7 +231,9 @@ class LocalGGUFProvider(ModelProvider):
 
         # Real inference through the detected backend (python or CLI). The
         # backend receives the DISCOVERED absolute model path — never a path
-        # reconstructed from the model name.
+        # reconstructed from the model name. Local timeouts are unlimited by
+        # default: a first load on a slow phone must never be killed
+        # mid-turn. ZERION_GGUF_TIMEOUT_SECONDS still bounds the wait.
         try:
             text, usage = await asyncio.to_thread(
                 backend.generate,
@@ -240,7 +242,7 @@ class LocalGGUFProvider(ModelProvider):
                 context=self._int_env("ZERION_GGUF_CONTEXT", 2048),
                 threads=self._threads(),
                 temperature=self._float_env("ZERION_GGUF_TEMPERATURE", 0.7),
-                timeout_s=self._int_env("ZERION_GGUF_TIMEOUT_SECONDS", 300))
+                timeout_s=self._timeout_env())
         except Exception as exc:  # noqa: BLE001
             self.last_error = f"{backend.error_label} failed: {exc}"
             return self._fallback(prompt, t0)
@@ -283,6 +285,18 @@ class LocalGGUFProvider(ModelProvider):
         )
 
     # -- tunables ----------------------------------------------------------
+
+    @staticmethod
+    def _timeout_env() -> Optional[float]:
+        """Local inference budget in seconds. None = unlimited (default); an
+        explicit ZERION_GGUF_TIMEOUT_SECONDS still bounds the wait."""
+        raw = os.environ.get("ZERION_GGUF_TIMEOUT_SECONDS", "").strip()
+        if not raw:
+            return None
+        try:
+            return max(1.0, float(raw))
+        except ValueError:
+            return None
 
     @staticmethod
     def _int_env(name: str, default: int) -> int:

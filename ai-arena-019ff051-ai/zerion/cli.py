@@ -133,12 +133,13 @@ async def _enter_interactive_chat(engine: AscendantEngine,
         print(f"MODEL INFERENCE = FAILED — {reason}")
         low = reason.lower()
         if "timeout" in low or "still alive" in low:
-            print("NOTE: the model was still loading when the probe budget ran "
-                  "out, not broken. On Android, copy the .gguf into Termux "
-                  "home (mkdir -p ~/models && cp <model>.gguf ~/models/) and/or "
-                  "allow more time via ZERION_GGUF_PROBE_TIMEOUT / "
-                  "ZERION_GGUF_TIMEOUT_SECONDS; a smaller model also loads "
-                  "faster on this phone.")
+            print("NOTE: the model was still loading when a timeout budget ran "
+                  "out, not broken. Timeouts are unlimited by default; if you "
+                  "set one, raise or unset ZERION_GGUF_PROBE_TIMEOUT / "
+                  "ZERION_GGUF_TIMEOUT_SECONDS. On Android, copy the .gguf "
+                  "into Termux home (mkdir -p ~/models && cp <model>.gguf "
+                  "~/models/) — FUSE-backed /storage/emulated/0 loads much "
+                  "slower; a smaller model also loads faster on this phone.")
     elif ms == "NO_LOCAL_MODEL_AVAILABLE":
         print("MODEL INFERENCE = NOT_VERIFIED (no local .gguf model)")
     print("Type a message and press Enter. 'exit' or Ctrl-C to quit.\n")
@@ -571,10 +572,12 @@ async def run_cli():
             # Canonical startup contract (spec §35): python main.py verifies
             # local readiness from REAL runtime checks before running. On a
             # phone the probe really loads the .gguf, which can take minutes;
-            # say so instead of appearing hung.
+            # say so instead of appearing hung. The probe waits as long as it
+            # takes (unlimited by default); ZERION_GGUF_PROBE_TIMEOUT bounds
+            # the wait for users who want one.
             print("[ZERION] Verifying local model readiness — the probe really "
-                  "loads the .gguf and can take minutes on a phone "
-                  "(ZERION_GGUF_PROBE_TIMEOUT controls the budget).")
+                  "loads the .gguf and waits as long as it takes (unlimited "
+                  "by default; set ZERION_GGUF_PROBE_TIMEOUT to bound it).")
             _print_readiness(engine)
             n = max(1, args.cycles)
             print(f"[GENESIS X10] Executing {n} autonomous developmental flywheel cycle(s)...")

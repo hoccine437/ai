@@ -144,23 +144,76 @@ class _GGUFProbeTest(unittest.TestCase):
         self.assertEqual(report["probe"]["inference"], "FAILED")
         self.assertIn("expected token", report["reason"])
 
-    def test_adaptive_probe_timeout_scales_with_model_size(self):
-        """The probe budget must scale with the model file size: a 9B Q2_K
-        (~3.4 GiB) on a phone legitimately needs minutes to load, and a fixed
-        120 s kill was producing false 'model broken' failures."""
+    def test_adaptive_probe_timeout_is_unlimited_by_default(self):
+        """The probe budget is UNLIMITED by default: a first model load on a
+        phone can legitimately take many minutes, and any fixed kill window
+        produced false 'model broken' failures. An explicit
+        ZERION_GGUF_PROBE_TIMEOUT still bounds the wait."""
         from zerion.cognitive_os.gguf_backend import adaptive_probe_timeout
-        self.assertEqual(adaptive_probe_timeout(0), 120.0)
-        self.assertEqual(adaptive_probe_timeout(1 << 30), 120.0)   # 1 GiB floor
-        self.assertGreaterEqual(adaptive_probe_timeout(4 << 30), 300.0)
-        self.assertGreaterEqual(adaptive_probe_timeout(10 << 30), 800.0)
-        self.assertLessEqual(adaptive_probe_timeout(100 << 30), 1800.0)
+        self.assertIsNone(adaptive_probe_timeout(0))
+        self.assertIsNone(adaptive_probe_timeout(1 << 30))
+        self.assertIsNone(adaptive_probe_timeout(100 << 30))
+        os.environ["ZERION_GGUF_PROBE_TIMEOUT"] = "600"
+        self.assertEqual(adaptive_probe_timeout(1 << 30), 600.0)
+        self.assertEqual(adaptive_probe_timeout(100 << 30), 600.0)
 
     def test_probe_reports_the_timeout_used(self):
         _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
         self._fake_cli(self._real_shape_body())
         report = probe_local_gguf(self.models_dir)
         self.assertEqual(report["status"], "READY")
-        self.assertEqual(report["probe"]["timeout_s"], 120.0)
+        # Unlimited by default — the probe waited as long as the model needed.
+        self.assertIsNone(report["probe"]["timeout_s"])
+        # An explicit budget is reported so the user sees what bounded it.
+        os.environ["ZERION_GGUF_PROBE_TIMEOUT"] = "240"
+        report = probe_local_gguf(self.models_dir)
+        self.assertEqual(report["probe"]["timeout_s"], 240.0)
+
+    def test_probe_reads_generation_from_output_file(self):
+        """Regression: post-refactor llama-cli writes 0 bytes to a redirected
+        stdout (generation goes to the terminal), so the probe must capture
+        the response via `-o <file>`. Here the model really generated
+        ZERION_LOCAL_OK but stdout is empty — the probe must still see the
+        token and report READY instead of 'got empty'."""
+        _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
+        body = (
+            "out=\n"
+            "prev=\n"
+            "for a in \"$@\"; do\n"
+            "  if [ \"$prev\" = \"-o\" ]; then out=\"$a\"; fi\n"
+            "  prev=\"$a\"\n"
+            "done\n"
+            "printf 'ZERION_LOCAL_OK\\n' > \"$out\"\n"
+            "# stdout is intentionally left empty, like the real new llama-cli\n"
+        )
+        self._fake_cli(body)
+        report = probe_local_gguf(self.models_dir)
+        self.assertEqual(report["status"], "READY")
+        self.assertEqual(report["probe"]["inference"], "VERIFIED")
+        self.assertEqual(report["probe"]["loadable"], "LOADED")
+        self.assertEqual(report["probe"]["probe_output"], "ZERION_LOCAL_OK")
+        self.assertIsNone(report["probe"]["error"])
+
+    def test_probe_falls_back_when_output_file_flags_unsupported(self):
+        """Older llama-cli builds don't know -o/--simple-io; the backend must
+        retry with plain single-shot args and parse stdout instead of
+        failing the whole probe."""
+        _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
+        body = (
+            "case \" $* \" in\n"
+            "  *' --simple-io '*|*' -o '*)\n"
+            "    echo 'error: unknown argument' >&2\n"
+            "    exit 1\n"
+            "    ;;\n"
+            "esac\n"
+            "printf 'LEGACY OK: ZERION_LOCAL_OK\\n'\n"
+        )
+        self._fake_cli(body)
+        report = probe_local_gguf(self.models_dir)
+        self.assertEqual(report["status"], "READY")
+        self.assertEqual(report["probe"]["inference"], "VERIFIED")
+        self.assertEqual(report["probe"]["probe_output"],
+                         "LEGACY OK: ZERION_LOCAL_OK")
 
     def test_probe_timeout_is_distinct_state_with_guidance(self):
         """A backend still alive past the budget is TIMEOUT (an interrupted

@@ -51,20 +51,21 @@ from zerion.cognitive_os.router_types import (
 DEFAULT_ROUTING_POLICY_VERSION = 6
 DEFAULT_PROVIDER_TIMEOUT_S = 30.0
 # Local GGUF inference includes the model load, which on Android/Termux can
-# take minutes for a 9B-class file — a fixed 30 s budget would kill llama-cli
-# mid-load on every turn. Default 300 s; ZERION_GGUF_TIMEOUT_SECONDS overrides.
-DEFAULT_LOCAL_PROVIDER_TIMEOUT_S = 300.0
+# take minutes for a 9B-class file — a fixed budget would kill llama-cli
+# mid-load on every turn. Local timeouts are UNLIMITED by default; an
+# explicit ZERION_GGUF_TIMEOUT_SECONDS still bounds the wait.
+DEFAULT_LOCAL_PROVIDER_TIMEOUT_S: Optional[float] = None
 DEFAULT_MAX_ATTEMPTS = 2
 
 
-def _local_timeout_from_env() -> float:
+def _local_timeout_from_env() -> Optional[float]:
     raw = os.environ.get("ZERION_GGUF_TIMEOUT_SECONDS", "").strip()
     if not raw:
-        return DEFAULT_LOCAL_PROVIDER_TIMEOUT_S
+        return None
     try:
         return max(1.0, float(raw))
     except ValueError:
-        return DEFAULT_LOCAL_PROVIDER_TIMEOUT_S
+        return None
 
 
 class ModelSelector:
@@ -538,18 +539,22 @@ class CognitiveRouter:
         await self._emit("ROUTING_FAILED", result.to_dict(redact=True))
         return result
 
-    def _timeout_for(self, task: Task, provider_name: str) -> float:
+    def _timeout_for(self, task: Task, provider_name: str) -> Optional[float]:
         provider = self._providers.get(provider_name)
         is_local = bool(getattr(provider, "is_local", False))
-        base = (self.local_provider_timeout_s if is_local
-                else self.provider_timeout_s)
+        base: Optional[float] = (self.local_provider_timeout_s if is_local
+                                 else self.provider_timeout_s)
         if not task.latency_budget_ms:
+            # None = no cap (local inference waits as long as it takes).
             return base
         budget = task.latency_budget_ms / 1000.0
         if is_local:
             # Local inference includes the model load; a generic latency
             # budget must never starve a real local call into a spurious
-            # timeout on a slow device.
+            # timeout on a slow device. Unlimited by default; an explicit
+            # task budget is honored with a 60 s floor.
+            if base is None:
+                return max(60.0, budget)
             return max(60.0, min(budget, base))
         return max(0.1, min(budget, base))
 
