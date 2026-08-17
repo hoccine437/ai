@@ -73,7 +73,8 @@ If neither backend exists the provider returns an honest labeled fallback that
 names the missing piece — it never fabricates model text. Tunables (env):
 `ZERION_GGUF_BACKEND` (`auto|python|cli|none`), `ZERION_GGUF_THREADS`,
 `ZERION_GGUF_CONTEXT` (default 2048), `ZERION_GGUF_MAX_TOKENS` (default 512),
-`ZERION_GGUF_TEMPERATURE` (default 0.7), `ZERION_GGUF_TIMEOUT_SECONDS`.
+`ZERION_GGUF_TEMPERATURE` (default 0.7), `ZERION_GGUF_TIMEOUT_SECONDS`,
+`ZERION_GGUF_PROBE_TIMEOUT`.
 Verify discovery with `python3 main.py --models`; if you keep the model
 elsewhere, point the runtime at it explicitly:
 
@@ -128,7 +129,9 @@ curl -s -X POST http://localhost:8080/api/command \
   (`RUN_TASK` with `OFFLINE_ONLY`, or voice/daemon tasks), not the flywheel.
 - Tunables: `ZERION_GGUF_BACKEND=cli`, `ZERION_GGUF_THREADS`,
   `ZERION_GGUF_CONTEXT`, `ZERION_GGUF_MAX_TOKENS`, `ZERION_GGUF_TEMPERATURE`,
-  `ZERION_GGUF_TIMEOUT_SECONDS`.
+  `ZERION_GGUF_TIMEOUT_SECONDS`, `ZERION_GGUF_PROBE_TIMEOUT` (the readiness
+  probe's load+inference budget in seconds; **unlimited by default** — a
+  first model load on a phone can take minutes).
 
 ## Pinned dependencies (2026-08-13)
 

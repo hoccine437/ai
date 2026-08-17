@@ -169,14 +169,47 @@ class _GGUFProbeTest(unittest.TestCase):
         report = probe_local_gguf(self.models_dir)
         self.assertEqual(report["probe"]["timeout_s"], 240.0)
 
-    def test_probe_reads_generation_from_output_file(self):
-        """Regression: post-refactor llama-cli writes 0 bytes to a redirected
-        stdout (generation goes to the terminal), so the probe must capture
-        the response via `-o <file>`. Here the model really generated
-        ZERION_LOCAL_OK but stdout is empty — the probe must still see the
-        token and report READY instead of 'got empty'."""
+    def test_probe_uses_simple_io_when_output_file_flag_rejected(self):
+        """Regression (device log): post-refactor llama-cli writes 0 bytes to
+        a redirected stdout, and a real build rejects `-o`/--output-file as an
+        "invalid argument" (ggml-org/llama.cpp#19256; the current llama-cli
+        man page has no --output-file flag at all). `--simple-io` alone is the
+        documented subprocess flag and must be tried FIRST: the probe then
+        captures the real generation from stdout and reports READY instead of
+        'probe output did not contain expected token (got '')'."""
         _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
         body = (
+            "case \" $* \" in\n"
+            "  *' -o '*)\n"
+            "    echo 'error: invalid argument: -o' >&2\n"
+            "    exit 1\n"
+            "    ;;\n"
+            "esac\n"
+            "printf 'ZERION_LOCAL_OK\\n'\n"
+        )
+        self._fake_cli(body)
+        report = probe_local_gguf(self.models_dir)
+        self.assertEqual(report["status"], "READY")
+        self.assertEqual(report["probe"]["inference"], "VERIFIED")
+        self.assertEqual(report["probe"]["loadable"], "LOADED")
+        self.assertEqual(report["probe"]["probe_output"], "ZERION_LOCAL_OK")
+        self.assertIsNone(report["probe"]["error"])
+
+    def test_probe_reads_generation_from_output_file(self):
+        """Regression: post-refactor llama-cli writes 0 bytes to a redirected
+        stdout (generation goes to the terminal). For builds that support
+        `-o <file>` (--output-file) but reject `--simple-io`, the probe must
+        capture the response via the output file. Here the model really
+        generated ZERION_LOCAL_OK but stdout is empty — the probe must still
+        see the token and report READY instead of 'got empty'."""
+        _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
+        body = (
+            "case \" $* \" in\n"
+            "  *' --simple-io '*)\n"
+            "    echo 'error: unknown argument: --simple-io' >&2\n"
+            "    exit 1\n"
+            "    ;;\n"
+            "esac\n"
             "out=\n"
             "prev=\n"
             "for a in \"$@\"; do\n"
@@ -214,6 +247,56 @@ class _GGUFProbeTest(unittest.TestCase):
         self.assertEqual(report["probe"]["inference"], "VERIFIED")
         self.assertEqual(report["probe"]["probe_output"],
                          "LEGACY OK: ZERION_LOCAL_OK")
+
+    def test_is_unknown_arg_error_matches_real_phrasings(self):
+        """llama.cpp has printed its arg-parse error under several phrasings
+        across builds; all of them must be recognized as retryable flag
+        rejections, while a real (non-flag) failure must not be."""
+        from subprocess import CompletedProcess
+
+        from zerion.cognitive_os.gguf_backend import _is_unknown_arg_error
+        for msg in (
+            "error: unknown argument: -o",
+            "error: invalid argument: -o",
+            "error: unrecognized option '--output-file'",
+            "error: unknown option: --simple-io",
+            "llama-cli: invalid option -- 'o'",
+            "no such option: -st",
+        ):
+            proc = CompletedProcess([], 1, stdout="", stderr=msg)
+            self.assertTrue(_is_unknown_arg_error(proc), msg)
+        proc = CompletedProcess(
+            [], 1, stdout="",
+            stderr="llama_model_load: failed to load model from file")
+        self.assertFalse(_is_unknown_arg_error(proc))
+
+    def test_no_retry_after_slow_model_load_failure(self):
+        """A nonzero exit AFTER argument parsing has spent real time (model
+        load in progress) is a genuine failure, not a flag rejection — the
+        backend must report it instead of re-loading the model up to four
+        times on a phone."""
+        import subprocess as _sp
+        from unittest import mock
+
+        from zerion.cognitive_os import gguf_backend as gb
+        _write_fake_gguf(Path(self.models_dir) / "model_a.gguf")
+        bin_dir = os.path.join(self._tmp, "bin")
+        os.makedirs(bin_dir, exist_ok=True)
+        script = os.path.join(bin_dir, "llama-cli")
+        with open(script, "w") as f:
+            f.write("#!/bin/sh\n"
+                    "sleep 6\n"  # load takes real time before failing
+                    "echo 'error: invalid argument (mmap EINVAL)' >&2\n"
+                    "exit 1\n")
+        os.chmod(script, 0o755)
+        os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+        os.environ["ZERION_GGUF_BACKEND"] = "cli"
+        with mock.patch.object(gb.subprocess, "run",
+                               wraps=_sp.run) as run:
+            report = probe_local_gguf(self.models_dir)
+        self.assertEqual(report["status"], "BLOCKED")
+        self.assertEqual(report["probe"]["loadable"], "FAILED")
+        self.assertEqual(run.call_count, 1)  # one attempt, no retry chain
 
     def test_probe_timeout_is_distinct_state_with_guidance(self):
         """A backend still alive past the budget is TIMEOUT (an interrupted

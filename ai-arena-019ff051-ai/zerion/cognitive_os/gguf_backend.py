@@ -131,15 +131,25 @@ def clean_generated_text(text: str) -> str:
 
 def _is_unknown_arg_error(proc: subprocess.CompletedProcess) -> bool:
     """True when llama-cli failed because it does not understand one of our
-    CLI flags (e.g. ``-o`` / ``--simple-io`` on a pre-refactor build), so the
-    caller can retry with a simpler argument form. Argument parsing happens
-    before any model load, so a failed variant is cheap."""
+    CLI flags (e.g. ``-o`` / ``--output-file`` / ``--simple-io`` / ``-st`` /
+    ``-no-cnv`` on a build that predates them), so the caller can retry with a
+    simpler argument form. Argument parsing happens before any model load, so
+    a failed variant is cheap.
+
+    Real llama.cpp builds print several phrasings of this error across
+    versions ("unknown argument: -o", "invalid argument: -o" [ggml-org/
+    llama.cpp#19256], "unrecognized option '--output-file'", "invalid option
+    -- 'o'", ...); match all of them. OS-level "Invalid argument" (e.g. an
+    mmap EINVAL during model load) also contains the phrase, which is why the
+    caller additionally requires the failure to have been fast — argument
+    parsing never loads the model.
+    """
     blob = f"{proc.stderr or ''}\n{proc.stdout or ''}".lower()
-    return ("unknown argument" in blob
-            or "unrecognized argument" in blob
-            or "unknown option" in blob
-            or "unrecognized option" in blob
-            or "invalid option" in blob)
+    return any(phrase in blob for phrase in (
+        "unknown argument", "unrecognized argument", "invalid argument",
+        "unknown option", "unrecognized option", "invalid option",
+        "no such option",
+    ))
 
 
 def extract_cli_output(stdout: str, prompt: str) -> str:
@@ -262,12 +272,15 @@ class LlamaCppCLIBackend:
     trap it in interactive mode (which previously made it echo ``> ``
     prompts forever instead of returning generated text).
 
-    Generated text is captured via ``-o <file>`` (``--output-file``) with
-    ``--simple-io``: post-refactor llama-cli (2025+) no longer routes
-    generation to a redirected stdout — the banner/echo/generation go to the
-    terminal and stdout comes back empty. Older binaries that reject those
-    flags fall back to plain single-shot invocation and parse the captured
-    streams."""
+    Generated text is captured via ``--simple-io`` — the documented
+    subprocess-mode IO flag ("use basic IO for better compatibility in
+    subprocesses") — because post-refactor llama-cli (2025+) no longer routes
+    generation to a redirected stdout: the banner/echo/generation go to the
+    terminal and stdout comes back empty. ``-o <file>`` (``--output-file``)
+    file capture and plain single-shot invocation are fallbacks for builds
+    that reject the newer flags. Older binaries are retried with
+    progressively simpler argument forms — argument parsing happens before
+    any model load, so a failed variant is cheap."""
 
     kind = "cli"
     display_name = "llama.cpp CLI"
@@ -307,26 +320,34 @@ class LlamaCppCLIBackend:
         # Post-refactor llama-cli (2025+) no longer routes generated text to a
         # redirected stdout — the banner/echo/generation go to the terminal
         # and stdout comes back empty (observed on Termux: the probe saw ''
-        # while the model really did generate). The officially supported
-        # capture is `-o <file>`; `--simple-io` is the subprocess-mode IO
-        # flag. Older binaries reject these, so retry without them when the
-        # binary reports an unknown argument (argument parsing happens before
-        # any model load, so a failed variant is cheap).
+        # while the model really did generate). The documented subprocess-mode
+        # flag is `--simple-io`; with it, generation goes to stdout and is
+        # captured normally. Some builds additionally/mostly support
+        # `-o <file>` (--output-file) capture, and pre-refactor binaries print
+        # to stdout natively — so try progressively simpler forms in that
+        # order. Argument parsing happens before any model load, so a
+        # rejected variant is cheap; a FAST nonzero exit naming the flag means
+        # "this build doesn't know it" (retry), a slow one means the model
+        # was already loading and failed (report it, never retry 4x on a
+        # phone).
         fd, out_path = tempfile.mkstemp(prefix="zerion_gguf_", suffix=".txt")
         os.close(fd)
         try:
             variants: List[Tuple[List[str], Optional[str]]] = [
+                (base + ["--simple-io"], None),
                 (base + ["-o", out_path, "--simple-io"], out_path),
                 (base + ["-o", out_path], out_path),
                 (base, None),
             ]
             last_arg_error: Optional[str] = None
             for cmd, output_file in variants:
+                t_start = time.perf_counter()
                 proc = subprocess.run(cmd, capture_output=True, text=True,
                                       timeout=timeout, check=False,
                                       stdin=subprocess.DEVNULL)
                 if proc.returncode != 0:
-                    if _is_unknown_arg_error(proc):
+                    elapsed_s = time.perf_counter() - t_start
+                    if _is_unknown_arg_error(proc) and elapsed_s < 5.0:
                         last_arg_error = (proc.stderr or proc.stdout
                                           or "").strip()[:200]
                         continue  # older build: try the next simpler variant
