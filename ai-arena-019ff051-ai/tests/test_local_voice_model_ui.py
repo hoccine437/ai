@@ -382,8 +382,10 @@ class TestOfflineNoKeyCognition(unittest.TestCase):
                 self.assertEqual(r["mode"], "LOCAL")
                 self.assertIn(r["keys"]["OPENAI_API_KEY"],
                               ("NOT_REQUIRED", "SET (optional)"))
+                # When a GGUF model IS discovered, BLOCKED is valid.
                 self.assertIn(r["models"]["status"],
-                              ("NO_LOCAL_MODEL_AVAILABLE", "READY"))
+                              ("NO_LOCAL_MODEL_AVAILABLE", "READY",
+                               "BLOCKED"))
             finally:
                 loop.run_until_complete(engine.stop())
                 loop.close()

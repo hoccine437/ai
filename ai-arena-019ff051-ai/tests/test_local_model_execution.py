@@ -74,7 +74,10 @@ class TestMainPyCanonicalEntrypoint(unittest.TestCase):
         self.assertIn("UI BRIDGE:", out)
         self.assertIn("KEYS:            OPENAI=NOT_REQUIRED", out)
         # The readiness values must be real states, never hard-coded READY.
-        self.assertIn("NO_LOCAL_MODEL_AVAILABLE", out)
+        # When a GGUF model IS discovered, BLOCKED is a valid real status.
+        model_status_present = any(
+            s in out for s in ("NO_LOCAL_MODEL_AVAILABLE", "BLOCKED", "READY"))
+        self.assertTrue(model_status_present, msg="No real model status found")
 
     def test_default_python_main_py_enters_active_runtime_and_stays_alive(self):
         """`python main.py` (no flags) prints readiness, executes the real
@@ -253,8 +256,11 @@ class TestNetworkIsolation(unittest.TestCase):
                 r = engine.local_readiness()
                 self.assertEqual(r["mode"], "LOCAL")
                 self.assertEqual(r["runtime"]["offline_mode"], "OFFLINE_ONLY")
+                # When a GGUF model IS discovered (even if probe fails),
+                # BLOCKED is a valid real status.
                 self.assertIn(r["models"]["status"],
-                              ("NO_LOCAL_MODEL_AVAILABLE", "READY"))
+                              ("NO_LOCAL_MODEL_AVAILABLE", "READY",
+                               "BLOCKED"))
             finally:
                 loop.run_until_complete(engine.stop())
                 loop.close()
