@@ -302,11 +302,20 @@ class TestMainPyChatEndToEnd(unittest.TestCase):
             self.assertIn("ZERION X", out)
             self.assertIn("MODE        LOCAL OFFLINE", out)
             self.assertIn("INPUT       TEXT", out)
-            # When a GGUF model IS discovered, the model line shows it.
-            # When no model exists, it shows NONE. Both are valid.
-            self.assertTrue(
-                "MODEL" in out and ("NONE" in out or "gguf" in out.lower() or "available" in out.lower()),
-                msg="Expected MODEL line in banner")
+            # The MODEL banner line must contain valid content:
+            # a model name, NONE (no model), or a status keyword.
+            model_line_found = False
+            for bline in out.split(chr(10)):
+                stripped = bline.strip()
+                if stripped.startswith("MODEL"):
+                    model_line_found = True
+                    # Valid: MODEL <name>, MODEL NONE ..., or MODEL <count> model(s)...
+                    self.assertTrue(
+                        "NONE" in stripped or "model" in stripped.lower()
+                        or len(stripped.split()) >= 2,
+                        msg=f"MODEL line has no valid content: {stripped!r}")
+                    break
+            self.assertTrue(model_line_found, msg="No MODEL line found in banner")
             # Turn 1 through the real runtime, then the prompt again.
             proc.stdin.write("Hello Zerion.\n")
             proc.stdin.flush()

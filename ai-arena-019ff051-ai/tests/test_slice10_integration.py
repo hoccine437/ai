@@ -177,7 +177,8 @@ class TestSlice10UI(unittest.IsolatedAsyncioTestCase):
                               ("AVAILABLE", "UNAVAILABLE", "NOT_CONFIGURED"))
                 if voice[eng]["status"] != "AVAILABLE":
                     self.assertTrue(voice[eng]["reason"])
-            # Model count reflects real discovery (may be 0 or more).
+            # Model count must be a non-negative integer from real discovery.
+            self.assertIsInstance(snap["models"]["count"], int)
             self.assertGreaterEqual(snap["models"]["count"], 0)
         finally:
             await engine.stop()
