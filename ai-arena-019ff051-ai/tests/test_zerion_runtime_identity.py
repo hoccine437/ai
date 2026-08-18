@@ -418,7 +418,7 @@ class TestExecuteTaskIdentityLoop(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.stub.calls)
         prompt = self.stub.calls[0]
         self.assertIn(IDENTITY_RULE, prompt)
-        self.assertIn("User: hello", prompt)
+        self.assertIn("hello", prompt)  # user message present in prompt
         self.assertIn("ZERION-X ASCENDANT", prompt)
         # The turn became a real episodic memory record.
         self.assertGreaterEqual(self.runtime.episode_store.count(), 1)

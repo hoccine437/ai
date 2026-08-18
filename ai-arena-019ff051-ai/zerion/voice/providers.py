@@ -381,7 +381,7 @@ class VoiceEnvironment:
     # -- synthesis ---------------------------------------------------------
 
     def synthesize(self, text: str, out_path: Optional[str] = None,
-                   timeout_s: float = 15.0) -> Dict[str, Any]:
+                   timeout_s: float = 30.0) -> Dict[str, Any]:
         """Produce REAL audio via the detected offline engine.
 
         Returns evidence: {status: AUDIO_GENERATED, engine, path, bytes} on

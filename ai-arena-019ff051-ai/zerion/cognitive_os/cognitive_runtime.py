@@ -1735,7 +1735,7 @@ class CognitiveRuntime:
             prompt, task=task,
             field=getattr(field, "value", None) if field else None,
             tools=tool_meta)
-        full_prompt = system_context + "\n\nUser: " + prompt
+        full_prompt = "<im_start>system\n" + system_context + "\n<im_end>\n<im_start>user\n" + prompt + "\n<im_end>\n<im_start>assistant\n"
 
         # 2) FAST FIELD: deterministic local tool routing (no model tokens).
         tool_name = None

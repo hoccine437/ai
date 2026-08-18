@@ -30,12 +30,20 @@ _TOOL_CALL_RE = re.compile(
     re.IGNORECASE | re.DOTALL)
 
 _MEMORY_STORE_RE = re.compile(
-    r"^(?:please\s+)?(?:remember|memorize|note that|store this|save that)"
-    r"[\s:,]+(.+)$", re.IGNORECASE)
+    r"^(?:(?:please\s+)?(?:remember|memorize|note that|store this|save that)"
+    r"[\s:,]+(.+)$"
+    r"|(?:my\s+(?:name\s+is|name\s*=)\s+)(.+)$"
+    r"|(?:call\s+me\s+)(.+)$"
+    r"|(?:i\s+am\s+)(.+?)\s*,?\s*(?:remember|note|save|store).*$"
+    r"|(?:my\s+name\s+is\s+)(.+?)\s+(?:remember|note|save|store)"
+    r"|(?:remember\s+that\s+)(.+)$"
+    r"|(?:remember\s+)(?!to\b)(.+)$)", re.IGNORECASE)
 _MEMORY_RECALL_RE = re.compile(
     r"^(?:what do you remember about|recall|what do you know about|"
-    r"what did i (?:ask|say|tell you) about|search memory for)"
-    r"[\s:,]+(.+)$", re.IGNORECASE)
+    r"what did i (?:ask|say|tell you) about|search memory for|"
+    r"what is my name|what.s my name|do you remember me|"
+    r"what did i tell you about|do you know who i am)"
+    r"[\s:,]*(.*)$", re.IGNORECASE)
 
 
 class ToolResult:
