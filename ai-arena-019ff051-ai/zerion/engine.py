@@ -110,6 +110,7 @@ from zerion.voice.providers import VoiceEnvironment
 from zerion.voice.perception_service import VoicePerceptionService
 from zerion.evolution.timeline import DevelopmentTimelineManager, DevelopmentSnapshot
 from zerion.runtime.daemon import AutonomyLevel, DevelopmentDaemon, BackgroundDiscoveryDaemon
+from zerion.cognitive_species.bridge import bridge_species_runtime
 from zerion.integration.android.mobile_runtime import MobileResourceGovernor
 from zerion.integration.termux_adapter import TermuxAdapter
 from zerion.integration.offline_fallback import OfflineFallbackManager
@@ -296,7 +297,7 @@ class AscendantEngine:
 
         # 13. Cognitive OS & Autonomous Organism & Intelligence Foundry
         # NOTE: the legacy CognitiveSpeciesRuntime (zerion/cognitive_species) is
-        # DEPRECATED and isolated — it is NOT constructed by the live runtime
+        # Now wired via bridge_species_runtime() — delegates to canonical stores (see section 13b)
         # (its own GoalField/router were a competing source of truth). Tests
         # that need it construct it directly.
         self.organism = CognitiveOrganism(data_dir=str(self.data_dir))
@@ -336,6 +337,8 @@ class AscendantEngine:
         self.daemon = DevelopmentDaemon(engine_ref=self, autonomy_level=AutonomyLevel.AUTONOMOUS_SAFE)
         self.discovery_daemon = BackgroundDiscoveryDaemon(engine_ref=self)
 
+        # 13b. Cognitive Species - legacy bridge delegated to canonical runtime
+        self.cognitive_species = bridge_species_runtime(self)
         # 14. Integration & Fallbacks
         self.termux = TermuxAdapter()
         self.offline = OfflineFallbackManager(model_fabric=self.model_fabric)
