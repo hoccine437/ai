@@ -38,14 +38,19 @@ _MEMORY_STORE_RE = re.compile(
     r"|(?:my\s+name\s+is\s+)(.+?)\s+(?:remember|note|save|store)"
     r"|(?:remember\s+that\s+)(.+)$"
     r"|(?:remember\s+)(?!to\b)(.+)$"
-    r"|(?:my\s+name\s+is\s+)(.+?)\s*,?\s*$)", re.IGNORECASE)
+    r"|(?:my\s+name\s+is\s+)(.+?)\s*,?\s*$)"
+    r"|(?:(\w+)\s+is\s+my\s+(\w+)\s*$)"
+    r"|(?:my\s+(?!name\s+is)(.+?)\s+is\s+)(.+)$"
+    r"|(?:i\s+(?:like|love|hate|prefer|enjoy|want|need)\s+)(.+)$"
+    r"|(?:the\s+(.+?)\s+is\s+)(.+)$"
+    r"|(?:(\S+)\s+is\s+my\s+(.+)\s*$)", re.IGNORECASE)
 _MEMORY_RECALL_RE = re.compile(
     r"^(?:what do you remember about|recall|what do you know about|"
     r"what did i (?:ask|say|tell you) about|search memory for|"
     r"what is my name|whats? my name|do you remember me|"
     r"what did i tell you about|do you know who i am|"
     r"do you know my name|tell me my name|"
-    r"do you remember my name|what.s my name)"
+    r"do you remember my name|what.s my name|what is my (\w+)|what.s my (\w+)|do i (?:like|love|hate|prefer|enjoy|want|need) (\w+)|tell me about my (.+)|what do i (?:like|love|hate|prefer|enjoy|want|need))"
     r"[\s:,]*(.*)$", re.IGNORECASE)
 
 
