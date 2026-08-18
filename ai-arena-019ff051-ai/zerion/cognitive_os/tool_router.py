@@ -43,6 +43,16 @@ _MEMORY_STORE_RE = re.compile(
     r"|(?:my\s+(?!name\s+is)(.+?)\s+is\s+)(.+)$"
     r"|(?:i\s+(?:like|love|hate|prefer|enjoy|want|need)\s+)(.+)$"
     r"|(?:the\s+(.+?)\s+is\s+)(.+)$"
+    r"|(?:(\w+)\s+is\s+)(?!my\b)(.+)$"
+    r"|(?:(\w+)\s+uses\s+)(.+)$"
+    r"|(?:(\w+)\s+does\s+)(.+)$"
+    r"|(?:(\w+)\s+can\s+)(.+)$"
+    r"|(?:(\w+)\s+controls\s+)(.+)$"
+    r"|(?:(\w+)\s+runs\s+)(.+)$"
+    r"|(?:(\w+)\s+means\s+)(.+)$"
+    r"|(?:(\w+)\s+has\s+)(.+)$"
+    r"|(?:(\w+)\s+stands\s+for\s+)(.+)$"
+    r"|(?:(\w+)\s+called\s+)(.+)$"
     r"|(?:(\S+)\s+is\s+my\s+(.+)\s*$)", re.IGNORECASE)
 _MEMORY_RECALL_RE = re.compile(
     r"^(?:what do you remember about|recall|what do you know about|"
@@ -50,7 +60,20 @@ _MEMORY_RECALL_RE = re.compile(
     r"what is my name|whats? my name|do you remember me|"
     r"what did i tell you about|do you know who i am|"
     r"do you know my name|tell me my name|"
-    r"do you remember my name|what.s my name|what is my (\w+)|what.s my (\w+)|do i (?:like|love|hate|prefer|enjoy|want|need) (\w+)|tell me about my (.+)|what do i (?:like|love|hate|prefer|enjoy|want|need))"
+    r"do you remember my name|what.s my name|what is my (\w+)|what.s my (\w+)|do i (?:like|love|hate|prefer|enjoy|want|need) (\w+)|tell me about my (.+)|what do i (?:like|love|hate|prefer|enjoy|want|need)|"
+    r"what does (\w+) (?:do|mean|stand for)\?|"
+    r"how (?:do you |to |can you )?(.+?)\?|"
+    r"where (?:does|do|is|are|can) (.+?)\?|"
+    r"when (?:does|do|is|are|was|were) (.+?)\?|"
+    r"why (?:does|do|is|are|was|were) (.+?)\?|"
+    r"explain (.+)|"
+    r"describe (.+)|"
+    r"teach me (.+)|"
+    r"what have i (?:taught|told|shared|learned)|"
+    r"how does (\w+) work\?|"
+    r"how do (\w+) work\?|"
+    r"can you (?:explain|teach|tell me about) (.+?)\?|"
+    r"what (.+?) does (\w+) use\?)"
     r"[\s:,]*(.*)$", re.IGNORECASE)
 
 
@@ -157,8 +180,8 @@ class ZerionToolRouter:
         # Check recall before store — 'what is my name' must not match store
         if _MEMORY_RECALL_RE.match(low):
             return "memory_recall"
-        if _MEMORY_STORE_RE.match(low):
-            return "memory_store"
+        # Specific tool checks BEFORE broad store patterns — prevents
+        # 'what can you do?' from matching the broad 'X can Y' store pattern
         if any(q in low for q in ("who are you", "who are u", "what are you",
                                   "your name", "introduce yourself")):
             return "identity"
@@ -177,6 +200,16 @@ class ZerionToolRouter:
         if any(q in low for q in ("what time", "current time", "the time is",
                                   "what is the date")):
             return "time"
+        # Store patterns last — they are broad and should not intercept
+        # specific tool requests or questions meant for the model.
+        # Guard: skip store for questions starting with question words
+        _qwords = {"what", "how", "where", "when", "why", "who", "which",
+                    "can", "could", "would", "should", "do", "does", "did",
+                    "is", "are", "was", "were", "will"}
+        if low.split()[0] in _qwords:
+            return None
+        if _MEMORY_STORE_RE.match(low):
+            return "memory_store"
         return None
 
     # -- DEEP FIELD: model-requested tool call ------------------------------
