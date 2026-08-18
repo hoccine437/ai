@@ -208,7 +208,7 @@ class TestSlice10UI(unittest.IsolatedAsyncioTestCase):
             task = Task(description="no providers should be available",
                         required_capabilities=set())
             result = await engine.cognitive_runtime.execute_task(
-                task, "hello", mode=RoutingMode.OFFLINE_ONLY)
+                task, "tell me about quantum physics", mode=RoutingMode.OFFLINE_ONLY)
             # When a model IS discovered but inference fails, the status
             # may be MODEL_LOAD_FAILURE instead of ROUTING_FAILED.
             self.assertIn(result.status.value,

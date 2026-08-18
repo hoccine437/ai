@@ -371,7 +371,7 @@ class TestGGUFPipeline(unittest.TestCase):
         d = Path(self.tmp.name) / "data2"
         rt = CognitiveRuntime(data_dir=str(d), models_dir=str(self.models_dir))
         res = asyncio.run(rt.execute_task(
-            _conv_task(), "hello", mode=RoutingMode.OFFLINE_ONLY))
+            _conv_task(), "tell me about quantum physics", mode=RoutingMode.OFFLINE_ONLY))
         self.assertEqual(res.status.value, "MODEL_LOAD_FAILURE")
         self.assertIsNone(res.output)
         self.assertTrue(any("local_gguf" in e for e in res.errors))
@@ -388,7 +388,7 @@ class TestGGUFPipeline(unittest.TestCase):
         d = Path(self.tmp.name) / "data3"
         rt = CognitiveRuntime(data_dir=str(d), models_dir=str(empty_models))
         res = asyncio.run(rt.execute_task(
-            _conv_task(), "hello", mode=RoutingMode.OFFLINE_ONLY))
+            _conv_task(), "tell me about quantum physics", mode=RoutingMode.OFFLINE_ONLY))
         self.assertEqual(res.status.value, "ROUTING_FAILED")
         self.assertIsNone(res.output)
         self.assertTrue(res.errors)

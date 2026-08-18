@@ -411,19 +411,19 @@ class TestExecuteTaskIdentityLoop(unittest.IsolatedAsyncioTestCase):
 
     async def test_model_prompt_contains_zerion_identity(self):
         result = await self.runtime.execute_task(
-            self._task("hello"), "hello", mode=RoutingMode.OFFLINE_ONLY)
+            self._task("tell me about quantum physics"), "tell me about quantum physics", mode=RoutingMode.OFFLINE_ONLY)
         self.assertEqual(result.status.value, "SUCCESS")
         self.assertEqual(result.output, "hello from stub engine")
         # The provider received the ZERION identity context, not bare text.
         self.assertTrue(self.stub.calls)
         prompt = self.stub.calls[0]
         self.assertIn(IDENTITY_RULE, prompt)
-        self.assertIn("hello", prompt)  # user message present in prompt
+        self.assertIn("tell me about quantum physics", prompt)  # user message present in prompt
         self.assertIn("ZERION-X ASCENDANT", prompt)
         # The turn became a real episodic memory record.
         self.assertGreaterEqual(self.runtime.episode_store.count(), 1)
         ep = self.runtime.episode_store.list()[-1]
-        self.assertIn("hello", ep.context)
+        self.assertIn("tell me about quantum physics", ep.context)
         self.assertTrue(ep.success)
 
     async def test_who_are_you_fast_path_is_zerion_not_qwen(self):
@@ -483,7 +483,7 @@ class TestExecuteTaskIdentityLoop(unittest.IsolatedAsyncioTestCase):
     async def test_empty_model_output_is_honest_failure(self):
         self.stub.script = None  # stub returns no output
         result = await self.runtime.execute_task(
-            self._task("hello"), "hello", mode=RoutingMode.OFFLINE_ONLY)
+            self._task("tell me about quantum physics"), "tell me about quantum physics", mode=RoutingMode.OFFLINE_ONLY)
         self.assertIsNone(result.output)
         self.assertNotEqual(result.status.value, "SUCCESS")
         decisions = [d["decision"] for d in result.metadata.get(

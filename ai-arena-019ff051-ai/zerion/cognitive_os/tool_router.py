@@ -34,15 +34,18 @@ _MEMORY_STORE_RE = re.compile(
     r"[\s:,]+(.+)$"
     r"|(?:my\s+(?:name\s+is|name\s*=)\s+)(.+)$"
     r"|(?:call\s+me\s+)(.+)$"
-    r"|(?:i\s+am\s+)(.+?)\s*,?\s*(?:remember|note|save|store).*$"
+    r"|(?:i\s+am\s+)(\S+)\s+(?:re\w*|mem\w*|note|save|store|pls|plz).*$"
     r"|(?:my\s+name\s+is\s+)(.+?)\s+(?:remember|note|save|store)"
     r"|(?:remember\s+that\s+)(.+)$"
-    r"|(?:remember\s+)(?!to\b)(.+)$)", re.IGNORECASE)
+    r"|(?:remember\s+)(?!to\b)(.+)$"
+    r"|(?:my\s+name\s+is\s+)(.+?)\s*,?\s*$)", re.IGNORECASE)
 _MEMORY_RECALL_RE = re.compile(
     r"^(?:what do you remember about|recall|what do you know about|"
     r"what did i (?:ask|say|tell you) about|search memory for|"
-    r"what is my name|what.s my name|do you remember me|"
-    r"what did i tell you about|do you know who i am)"
+    r"what is my name|whats? my name|do you remember me|"
+    r"what did i tell you about|do you know who i am|"
+    r"do you know my name|tell me my name|"
+    r"do you remember my name|what.s my name)"
     r"[\s:,]*(.*)$", re.IGNORECASE)
 
 
@@ -91,6 +94,9 @@ class ZerionToolRouter:
 
     def _register_defaults(self) -> None:
         self._register(ZerionTool(
+            "greeting", "friendly greeting when the user says hello/hi",
+            self._tool_greeting))
+        self._register(ZerionTool(
             "identity", "report who ZERION is (identity, mission, state)",
             self._tool_identity))
         self._register(ZerionTool(
@@ -138,10 +144,16 @@ class ZerionToolRouter:
         low = (user_text or "").strip().lower()
         if not low:
             return None
-        if _MEMORY_STORE_RE.match(low):
-            return "memory_store"
+        # Word-boundary greeting detection: 'hi' must not match inside 'this'
+        _greet_words = {"hello", "hi", "hey", "greetings", "howdy", "sup", "yo"}
+        words = set(low.split())
+        if words & _greet_words and len(words) <= 2:
+            return "greeting"
+        # Check recall before store — 'what is my name' must not match store
         if _MEMORY_RECALL_RE.match(low):
             return "memory_recall"
+        if _MEMORY_STORE_RE.match(low):
+            return "memory_store"
         if any(q in low for q in ("who are you", "who are u", "what are you",
                                   "your name", "introduce yourself")):
             return "identity"
@@ -217,6 +229,13 @@ class ZerionToolRouter:
                 error=f"{type(exc).__name__}: {str(exc)[:200]}")
 
     # -- real local tools ---------------------------------------------------
+
+    def _tool_greeting(self, _arg: str, _router) -> ToolResult:
+        return ToolResult(
+            ok=True, tool="greeting",
+            output="Hello! I am ZERION, your autonomous cognitive assistant. "
+                   "I run entirely on your local device with no cloud connection. "
+                   "How can I help you today?")
 
     def _tool_identity(self, _arg: str, _router) -> ToolResult:
         try:
@@ -306,10 +325,11 @@ class ZerionToolRouter:
                     f"(episode {stored.episode_id})."))
 
     def _tool_memory_recall(self, arg: str, _router) -> ToolResult:
-        query = (arg or "").strip()
+        query = (arg or "").strip().rstrip("?!.,;:")
         if not query:
-            return ToolResult(ok=False, tool="memory_recall", output="",
-                              error="nothing to recall (empty argument)")
+            # Empty query (e.g. "what is my name?") — search for
+            # personal/user-identity memories broadly.
+            query = "name user remember"
         hits: List[str] = []
         try:
             reuse = getattr(self.runtime, "experience_reuse", None)
@@ -328,9 +348,13 @@ class ZerionToolRouter:
                     context = str(getattr(ep, "context", "") or "")
                     ep_words = set(re.findall(r"[a-z0-9_]+", context.lower()))
                     shared = ep_words & q_words
-                    # Require a substantive shared word (len > 3) so common
-                    # words like "the"/"is" do not match everything.
-                    if shared and any(len(w) > 3 for w in shared):
+                    # Require a substantive shared word. Use len > 2
+                    # (catches "name", "nano") but skip very common
+                    # stopwords (the, is, am, are, do, you, my, to).
+                    _STOP = {"the", "is", "am", "are", "do", "you",
+                             "my", "to", "a", "an", "in", "on", "it"}
+                    meaningful = shared - _STOP
+                    if meaningful:
                         hits.append(f"[episode] {context[:200]}")
         except Exception:  # noqa: BLE001
             pass
