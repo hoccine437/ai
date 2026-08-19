@@ -57,6 +57,50 @@ async def _enter_persistent_runtime(engine: AscendantEngine,
         pass
 
 
+# -- Brief thinking hints (Arabic-friendly status) -----------------------
+
+# Mapping from detected intent keywords to brief Arabic status hints.
+# These appear briefly while the model is processing, giving the user
+# feedback that ZERION understood their intent.
+_INTENT_HINTS = {
+    # Diagnostic / system
+    " problem":   "\u0627\u0644\u062d\u0627\u0644 ...",
+    " diagnose":  "\u0627\u0644\u062d\u0627\u0644 ...",
+    "status":     "\u0627\u0644\u062d\u0627\u0644 ...",
+    "ready":      "\u0627\u0644\u062d\u0627\u0644 ...",
+    # Repair / fix
+    "fix":        "\u064a\u0639\u0645\u0644 ...",
+    "repair":     "\u064a\u0639\u0645\u0644 ...",
+    "solve":      "\u064a\u0642\u0648\u0645 \u0628\u0627\u0644\u062d\u0644 ...",
+    "\u0635\u0644\u062d":       "\u064a\u0639\u0645\u0644 ...",
+    # Test / verify
+    "test":       "\u064a\u062c\u0631\u0628 ...",
+    "verify":     "\u064a\u062a\u062d\u0642\u0642 ...",
+    "\u062c\u0631\u0628":        "\u064a\u062c\u0631\u0628 ...",
+    # Learn / remember
+    "learn":      "\u064a\u062a\u0639\u0644\u0645 ...",
+    "remember":   "\u064a\u062d\u0641\u0638 ...",
+    "\u062a\u0639\u0644\u0645":       "\u064a\u062a\u0639\u0644\u0645 ...",
+    "\u0634\u0648\u0641":        "\u064a\u0641\u062d\u0635 ...",
+    # General inquiry
+    "what":       "\u064a\u0641\u0647\u0645 ...",
+    "how":        "\u064a\u0641\u0647\u0645 ...",
+    "why":        "\u064a\u0641\u0647\u0645 ...",
+    "\u0639\u0644\u0627\u0634":       "\u064a\u0641\u0647\u0645 ...",
+    "\u0634\u0646\u0648":        "\u064a\u0641\u0647\u0645 ...",
+}
+
+
+def _think_hint(user_text):
+    """Print a brief intent hint while the model processes."""
+    low = user_text.strip().lower()
+    for keyword, hint in _INTENT_HINTS.items():
+        if keyword in low:
+            print("[ZERION] " + hint)
+            return
+    print("[ZERION] THINKING...")
+
+
 async def _enter_interactive_chat(engine: AscendantEngine,
                                   shutdown_event: asyncio.Event,
                                   stdin=None) -> None:
@@ -197,7 +241,8 @@ async def _enter_interactive_chat(engine: AscendantEngine,
         conversation.add_user_turn(text)
 
         try:
-            print("[ZERION] THINKING...")
+            # Brief thinking hint — the model decides the real action
+            _think_hint(text)
             task = Task(
                 type=TaskType.CONVERSATION,
                 description=f"User message: {text[:200]}",
@@ -247,7 +292,7 @@ async def _enter_interactive_chat(engine: AscendantEngine,
                 except Exception:
                     pass
                 if tool_used:
-                    print(f"[ZERION] used: {tool_used}")
+                    print(f"[ZERION] >> {tool_used}")
 
                 print(f"\n[ZERION]\n{out}")
                 conversation.add_zerion_turn(
