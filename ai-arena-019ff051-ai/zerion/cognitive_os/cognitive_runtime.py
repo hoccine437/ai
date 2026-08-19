@@ -1666,6 +1666,141 @@ class CognitiveRuntime:
             raise KeyError(f"Unknown capability {capability_id}")
         return cap
 
+    # -- cognitive pre-reasoning -------------------------------------------
+
+    async def _cognitive_pre_reason(self, task, prompt, goal_id=None):
+        """Cognitive pre-reasoning: Zerion analyzes the task BEFORE
+        generating a response. Returns enriched cognitive context."""
+        parts = []
+        prompt_lower = prompt.lower().strip()
+
+        # 1) UNDERSTANDING
+        intent = self._classify_intent(prompt_lower)
+        parts.append("INTENT: " + intent)
+
+        # 2) GOAL ALIGNMENT
+        if goal_id:
+            parts.append("ACTIVE GOAL: " + str(goal_id))
+
+        # 3) MEMORY RETRIEVAL
+        memory_hints = []
+        try:
+            episodes = self.episode_store.list()[-20:]
+            for ep in episodes:
+                ctx = str(getattr(ep, "context", "") or "")
+                if any(w in ctx.lower() for w in prompt_lower.split() if len(w) > 3):
+                    memory_hints.append(ctx[:100])
+        except Exception:
+            pass
+        if memory_hints:
+            parts.append("RELEVANT MEMORY: " + "; ".join(memory_hints[:3]))
+
+        # 4) STRATEGY
+        strategy = self._select_strategy(prompt_lower, intent)
+        parts.append("STRATEGY: " + strategy)
+
+        # 5) UNCERTAINTY
+        uncertainty = []
+        if "?" in prompt:
+            uncertainty.append("User expects an answer")
+        if any(w in prompt_lower for w in ["how", "why", "explain"]):
+            uncertainty.append("Depth of explanation needed")
+        if any(w in prompt_lower for w in ["fix", "solve", "debug"]):
+            uncertainty.append("Problem diagnosis required")
+        if uncertainty:
+            parts.append("CONSIDERATIONS: " + "; ".join(uncertainty))
+
+        # 6) FAILURE AWARENESS
+        try:
+            failures = self.failure_store.list_failures()[-10:]
+            for f in failures:
+                action = str(getattr(f, "action", "") or "")
+                error = str(getattr(f, "error", "") or "")
+                if any(w in (action + error).lower()
+                       for w in prompt_lower.split() if len(w) > 3):
+                    parts.append("PAST FAILURE: " + action + " failed: " + error[:80])
+                    break
+        except Exception:
+            pass
+
+        return "\n".join(parts)
+
+    def _classify_intent(self, prompt_lower):
+        """Classify user intent from their message."""
+        if any(w in prompt_lower for w in ["hello", "hi ", "hey", "greetings"]):
+            return "greeting"
+        if any(w in prompt_lower for w in ["remember", "learn this", "save"]):
+            return "knowledge_storage"
+        if any(w in prompt_lower for w in ["what did you learn", "what do you know",
+                                            "recall", "what is my"]):
+            return "knowledge_retrieval"
+        if any(w in prompt_lower for w in ["forget", "remove", "delete"]):
+            return "knowledge_forget"
+        if any(w in prompt_lower for w in ["actually", "no,", "wrong", "correct"]):
+            return "knowledge_correction"
+        if any(w in prompt_lower for w in ["who are you", "what are you"]):
+            return "identity"
+        if any(w in prompt_lower for w in ["what can you do", "capabilities"]):
+            return "capabilities"
+        if any(w in prompt_lower for w in ["status", "are you ready"]):
+            return "status"
+        if any(w in prompt_lower for w in ["fix", "solve", "debug", "error",
+                                            "broken", "problem"]):
+            return "problem_solving"
+        if any(w in prompt_lower for w in ["how", "why", "explain", "what is"]):
+            return "question"
+        if any(w in prompt_lower for w in ["create", "build", "write", "make"]):
+            return "creation"
+        if "?" in prompt_lower:
+            return "question"
+        return "conversation"
+
+    def _select_strategy(self, prompt_lower, intent):
+        """Select strategy based on intent."""
+        if "greeting" in intent:
+            return "friendly acknowledgment"
+        if "storage" in intent or "retrieval" in intent or "forget" in intent:
+            return "use memory tools directly"
+        if "problem_solving" in intent:
+            return "diagnose, identify root cause, propose fix, verify"
+        if "question" in intent:
+            return "draw from knowledge, provide clear answer"
+        if "creation" in intent:
+            return "understand requirements, plan, implement, test"
+        return "understand intent, gather context, reason, respond"
+
+    # -- cognitive reflection -----------------------------------------------
+
+    async def _cognitive_reflect(self, task, prompt, result, goal_id=None):
+        """Post-action reflection: Zerion reflects on what happened."""
+        try:
+            output = getattr(result, "output", None) or ""
+            success = bool(output) and getattr(result, "status", None) == ResultStatus.SUCCESS
+            tool_used = str(result.metadata.get("tool", "")
+                           or result.metadata.get("tool_used", ""))
+
+            reflection = {
+                "user_intent": self._classify_intent(prompt.lower()),
+                "strategy_used": tool_used if tool_used else "model_reasoning",
+                "success": success,
+                "output_length": len(output),
+            }
+
+            if success and len(output.strip()) < 10:
+                reflection["quality_signal"] = "suspiciously_short"
+            elif success and len(output.strip()) > 500:
+                reflection["quality_signal"] = "comprehensive"
+            else:
+                reflection["quality_signal"] = "normal"
+
+            if tool_used:
+                reflection["tool_reliability"] = "used_successfully" if success else "tool_failed"
+
+            result.metadata["cognitive_reflection"] = reflection
+
+        except Exception:
+            pass
+
     # --- Slice 6: cognitive routing --------------------------------------------
 
     async def _emit_routing_event(self, event_type: str,
@@ -1764,8 +1899,24 @@ class CognitiveRuntime:
                                       decision="local_tool")
             return result
 
-        # 3) MODEL call with the ZERION context (Qwen is the engine, ZERION
-        #    is the identity; unlimited inference time for local models).
+        # 3) COGNITIVE PRE-REASONING: Zerion thinks BEFORE responding.
+        #    This is NOT just passing input to the LLM — Zerion analyzes
+        #    the task, identifies what it understands vs. what it needs
+        #    to figure out, considers strategies, and prepares the model
+        #    call with enriched cognitive context.
+        cognitive_context = await self._cognitive_pre_reason(
+            task, prompt, goal_id)
+        if cognitive_context:
+            # Insert cognitive context into the user section, BEFORE the
+            # assistant marker, so the model sees it as part of the input.
+            full_prompt = full_prompt.replace(
+                "\n<im_end>\n<im_start>assistant\n",
+                "\n\n[ZERION COGNITIVE CONTEXT]\n"
+                + cognitive_context
+                + "\n[/ZERION COGNITIVE CONTEXT]\n"
+                + "<im_end>\n<im_start>assistant\n")
+
+        # 3b) MODEL call with enriched ZERION context.
         result = await self.cognitive_router.execute(
             task, full_prompt, mode=mode, selection=selection)
 
@@ -1864,7 +2015,11 @@ class CognitiveRuntime:
                 revisions += 1
                 continue
 
-        # 6) Memory update: this turn becomes a real episodic record.
+        # 6) COGNITIVE REFLECTION: Zerion reflects on what happened,
+        #    what it learned, and updates its understanding.
+        await self._cognitive_reflect(task, prompt, result, goal_id)
+
+        # 6b) Memory update: this turn becomes a real episodic record.
         self._record_conversation_episode(task, prompt, result)
 
         # 7) Ledger + decision policy over REAL evidence.
