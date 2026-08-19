@@ -53,7 +53,30 @@ _MEMORY_STORE_RE = re.compile(
     r"|(?:(\w+)\s+has\s+)(.+)$"
     r"|(?:(\w+)\s+stands\s+for\s+)(.+)$"
     r"|(?:(\w+)\s+called\s+)(.+)$"
-    r"|(?:(\S+)\s+is\s+my\s+(.+)\s*$)", re.IGNORECASE)
+    r"|(?:\w+\s+\w+\s+is\s+)(?!my\b)(.+)$"
+    r"|(?:\S+\s+is\s+a\s+)(.+)$"
+    r"|(?:\S+\s+is\s+an\s+)(.+)$"
+    r"|(?:\w+\s+\w+\s+are\s+)(?!you)(.+)$"
+    r"|(?:\w+\s+\w+\s+have\s+)(.+)$"
+    r"|(?:\w+\s+\w+\s+use\s+)(.+)$"
+    r"|(?:\w+\s+\w+\s+means\s+)(.+)$"
+    r"|(?:\w+\s+\w+\s+means\s+that\s+)(.+)$"
+    r"|(?:\w+\s+\w+\s+supports\s+)(.+)$"
+    r"|(?:\w+\s+\w+\s+implements\s+)(.+)$"
+    r"|(?:\w+\s+\w+\s+follows\s+)(.+)$"
+    r"|(?:\S+\s+\+\+\s+is\s+)(?!my\b)(.+)$"
+    r"|(?:(\S+)\s+is\s+my\s+(.+)\s*$)"
+    r"|(?:I\s+learned\s+that\s+)(.+)$"
+    r"|(?:classify\s+by\s+)(.+)$"
+    r"|(?:the\s+user\s+thinks\s+)(.+)$"
+    r"|(?:\w+\s+\w+\s+use\s+)(.+)$"
+    r"|(?:\w+\s+supports\s+)(.+)$"
+    r"|(?:\w+\s+are\s+)(?!you)(.+)$"
+    r"|(?:\w+\s+means\s+that\s+)(.+)$"
+    r"|(?:\w+\s+have\s+)(.+)$"
+    r"|(?:\w+\s+use\s+)(.+)$"
+    r"|(?:\w+\s+implement\s+)(.+)$"
+    r"|(?:\w+\s+follow\s+)(.+)$", re.IGNORECASE)
 _MEMORY_RECALL_RE = re.compile(
     r"^(?:what do you remember about|recall|what do you know about|"
     r"what did i (?:ask|say|tell you) about|search memory for|"
@@ -61,20 +84,21 @@ _MEMORY_RECALL_RE = re.compile(
     r"what did i tell you about|do you know who i am|"
     r"do you know my name|tell me my name|"
     r"do you remember my name|what.s my name|what is my (\w+)|what.s my (\w+)|do i (?:like|love|hate|prefer|enjoy|want|need) (\w+)|tell me about my (.+)|what do i (?:like|love|hate|prefer|enjoy|want|need)|"
-    r"what does (\w+) (?:do|mean|stand for)\?|"
-    r"how (?:do you |to |can you )?(.+?)\?|"
-    r"where (?:does|do|is|are|can) (.+?)\?|"
-    r"when (?:does|do|is|are|was|were) (.+?)\?|"
-    r"why (?:does|do|is|are|was|were) (.+?)\?|"
+    r"what does (\w+) (?:do|mean|stand for)\??|"
+    r"what (\w+) is (\w+)\??|"
+    r"how (?:do you |to |can you )?(.+?)\??|"
+    r"where (?:does|do|is|are|can) (.+?)\??|"
+    r"when (?:does|do|is|are|was|were) (.+?)\??|"
+    r"why (?:does|do|is|are|was|were) (.+?)\??|"
     r"explain (.+)|"
     r"describe (.+)|"
     r"teach me (.+)|"
     r"what have i (?:taught|told|shared|learned)|"
-    r"how does (\w+) work\?|"
-    r"how do (\w+) work\?|"
-    r"can you (?:explain|teach|tell me about) (.+?)\?|"
-    r"what (.+?) does (\w+) use\?)"
-    r"[\s:,]*(.*)$", re.IGNORECASE)
+    r"how does (\w+) work\??|"
+    r"how do (\w+) work\??|"
+    r"can you (?:explain|teach|tell me about) (.+?)\??|"
+    r"what (.+?) does (\w+) use\??"
+    r")[\s:,]*(.*)$", re.IGNORECASE)
 
 
 class ToolResult:
@@ -203,9 +227,7 @@ class ZerionToolRouter:
         # Store patterns last — they are broad and should not intercept
         # specific tool requests or questions meant for the model.
         # Guard: skip store for questions starting with question words
-        _qwords = {"what", "how", "where", "when", "why", "who", "which",
-                    "can", "could", "would", "should", "do", "does", "did",
-                    "is", "are", "was", "were", "will"}
+        _qwords = {"what", "how", "where", "why", "who", "which"}
         if low.split()[0] in _qwords:
             return None
         if _MEMORY_STORE_RE.match(low):
