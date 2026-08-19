@@ -127,15 +127,16 @@ class ZerionRuntimeContext:
         return caps[:24]
 
     def _memory(self, user_text: str) -> List[str]:
-        """Relevance-based memory retrieval — never the whole store."""
+        """Relevance-based memory retrieval — searches ALL stored
+        knowledge, not just recent episodes."""
         items: List[str] = []
         try:
             reuse = getattr(self.runtime, "experience_reuse", None)
             if reuse is not None:
-                for hit in reuse.retrieve(context=user_text[:300], top_k=3):
+                for hit in reuse.retrieve(context=user_text[:300], top_k=5):
                     statement = str(hit.get("statement", "") or "")
                     if statement:
-                        items.append(f"[lesson] {statement[:160]}")
+                        items.append(f"[lesson] {statement[:200]}")
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -143,19 +144,27 @@ class ZerionRuntimeContext:
             if episodes is not None:
                 import re as _re
                 q_words = set(_re.findall(r"[a-z0-9_]+", user_text.lower()))
-                for ep in episodes.list()[-4:]:
+                _STOP = {"the", "is", "am", "are", "do", "you",
+                         "my", "to", "a", "an", "in", "on", "it",
+                         "that", "this", "of", "for", "was", "has",
+                         "have", "can", "with", "from", "not", "but"}
+                # Search ALL episodes, not just the last few
+                for ep in episodes.list():
                     context = str(getattr(ep, "context", "") or "")
                     if not context:
                         continue
-                    ep_words = set(_re.findall(r"[a-z0-9_]+", context.lower()))
+                    # Extract clean fact from "knowledge: X" format
+                    fact = context
+                    if fact.startswith("knowledge: "):
+                        fact = fact[len("knowledge: "):]
+                    ep_words = set(_re.findall(r"[a-z0-9_]+", fact.lower()))
                     shared = ep_words & q_words
-                    # Substantive overlap only (len > 3) — common words must
-                    # not match every stored episode.
-                    if shared and any(len(w) > 3 for w in shared):
-                        items.append(f"[episode] {context[:120]}")
+                    meaningful = shared - _STOP
+                    if meaningful and any(len(w) > 2 for w in meaningful):
+                        items.append(f"[knowledge] {fact[:200]}")
         except Exception:  # noqa: BLE001
             pass
-        return items[:5]
+        return items[:8]
 
     def _user_learning(self) -> List[str]:
         try:

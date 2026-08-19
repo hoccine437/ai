@@ -80,11 +80,22 @@ _MEMORY_STORE_RE = re.compile(
     r"|(?:\w+\s+use\s+)(.+)$"
     r"|(?:\w+\s+implement\s+)(.+)$"
     r"|(?:\w+\s+follow\s+)(.+)$", re.IGNORECASE)
+
+# FORGET: "forget X", "remove X", "delete X", "clear X"
+_MEMORY_FORGET_RE = re.compile(
+    r"^(?:forget|remove|delete|clear|erase|wipe)\s+(?:about\s+|what\s+(?:i\s+)?(?:told|said|taught)\s+you\s+(?:about\s+)?)?(.+)$",
+    re.IGNORECASE)
+
+# CORRECTION: "actually X is Y", "no X is Y", "correct X to Y", "I meant Y"
+_MEMORY_CORRECT_RE = re.compile(
+    r"^(?:actually|no[,.]?\s*|wrong[,.]?\s*|correction[,:]\s*|i\s+meant\s+|it'?s\s+(?:actually\s+)?|change\s+(?:it\s+to|to)\s+|replace\s+.+\s+with\s+)(.+)$",
+    re.IGNORECASE)
+
 _MEMORY_RECALL_RE = re.compile(
     r"^(?:what do you remember about|recall|what do you know about|"
     r"what did i (?:ask|say|tell you) about|search memory for|"
     r"what is my name|whats? my name|do you remember me|"
-    r"what did i tell you about|do you know who i am|"
+    r"what did i tell you about|what did i teach you|what did i learn you|do you know who i am|"
     r"do you know my name|tell me my name|"
     r"do you remember my name|what.s my name|what is my (\w+)|what.s my (\w+)|do i (?:like|love|hate|prefer|enjoy|want|need) (\w+)|tell me about my (.+)|what do i (?:like|love|hate|prefer|enjoy|want|need)|"
     r"what does (\w+) (?:do|mean|stand for)\??|"
@@ -96,7 +107,7 @@ _MEMORY_RECALL_RE = re.compile(
     r"explain (.+)|"
     r"describe (.+)|"
     r"teach me (.+)|"
-    r"what have i (?:taught|told|shared|learned)|"
+    r"what have i (?:taught|told|shared|learned)|what did you learn|what do you know|what have you learned|tell me what you know|"
     r"how does (\w+) work\??|"
     r"how do (\w+) work\??|"
     r"can you (?:explain|teach|tell me about) (.+?)\??|"
@@ -163,6 +174,12 @@ class ZerionToolRouter:
         self._register(ZerionTool(
             "memory_recall", "retrieve stored memory relevant to a topic",
             self._tool_memory_recall))
+        self._register(ZerionTool(
+            "memory_forget", "forget or remove a previously stored memory",
+            self._tool_memory_forget))
+        self._register(ZerionTool(
+            "memory_correct", "correct previously stored information",
+            self._tool_memory_correct))
         self._register(ZerionTool(
             "status", "report real runtime readiness (model/STT/TTS)",
             self._tool_status))
@@ -234,6 +251,12 @@ class ZerionToolRouter:
         _qwords = {"what", "how", "where", "why", "who", "which"}
         if low.split()[0] in _qwords:
             return None
+        # Check forget before store
+        if _MEMORY_FORGET_RE.match(low):
+            return "memory_forget"
+        # Check correction before store
+        if _MEMORY_CORRECT_RE.match(low):
+            return "memory_correct"
         if _MEMORY_STORE_RE.match(low):
             return "memory_store"
         return None
@@ -277,10 +300,15 @@ class ZerionToolRouter:
         try:
             # Memory tools extract their fact/query from the verb phrase so
             # "remember X" stores X (not "remember X").
-            if not argument and name in ("memory_store", "memory_recall"):
+            if not argument and name in ("memory_store", "memory_recall",
+                                          "memory_forget", "memory_correct"):
                 low = (user_text or "").strip()
                 if name == "memory_store":
                     m = _MEMORY_STORE_RE.match(low)
+                elif name == "memory_forget":
+                    m = _MEMORY_FORGET_RE.match(low)
+                elif name == "memory_correct":
+                    m = _MEMORY_CORRECT_RE.match(low)
                 else:
                     m = _MEMORY_RECALL_RE.match(low)
                 if m is not None:
@@ -289,6 +317,11 @@ class ZerionToolRouter:
                     argument = next(
                         (g for g in m.groups() if g is not None), ""
                     ).strip()
+                    # If extracted argument is just punctuation or too short,
+                    # use the raw user text instead — the handler will
+                    # clean it up.
+                    if len(argument) < 3:
+                        argument = ""
             result = tool.handler(argument or user_text, self)
             return result
         except Exception as exc:  # noqa: BLE001 — honest structured failure
@@ -377,20 +410,22 @@ class ZerionToolRouter:
             EpisodeStatus,
             ExperienceEpisode,
         )
+        # Store the fact cleanly as knowledge — the fact IS the knowledge,
+        # not a sentence about the user asking to store it.
         episode = ExperienceEpisode(
-            context=f"user asked ZERION to remember: {fact[:500]}",
+            context=f"knowledge: {fact[:500]}",
             mode=EpisodeMode.OBSERVED,
             status=EpisodeStatus.COMPLETED,
             success=True,
             actions=[{"action": "memory_store", "detail": fact[:500]}],
-            outcomes=[{"outcome": "stored", "detail": "persisted episode"}],
+            outcomes=[{"outcome": "knowledge_stored",
+                       "detail": fact[:500]}],
             capabilities_used=["memory_store"],
         )
         stored = episode_store.put(episode)
         return ToolResult(
             ok=True, tool="memory_store",
-            output=(f"Stored to my episodic memory: \"{fact}\" "
-                    f"(episode {stored.episode_id})."))
+            output=f"Learned: {fact}")
 
     def _tool_memory_recall(self, arg: str, _router) -> ToolResult:
         query = (arg or "").strip().rstrip("?!.,;:")
@@ -402,28 +437,31 @@ class ZerionToolRouter:
         try:
             reuse = getattr(self.runtime, "experience_reuse", None)
             if reuse is not None:
-                for hit in reuse.retrieve(context=query, top_k=3):
+                for hit in reuse.retrieve(context=query, top_k=5):
                     statement = str(hit.get("statement", "") or "")
                     if statement:
-                        hits.append(statement[:200])
+                        hits.append(statement[:300])
         except Exception:  # noqa: BLE001
             pass
         try:
             episode_store = getattr(self.runtime, "episode_store", None)
             if episode_store is not None:
                 q_words = set(re.findall(r"[a-z0-9_]+", query.lower()))
-                for ep in episode_store.list()[-40:]:
+                for ep in episode_store.list()[-50:]:
                     context = str(getattr(ep, "context", "") or "")
-                    ep_words = set(re.findall(r"[a-z0-9_]+", context.lower()))
+                    # Extract the knowledge from "knowledge: X" format
+                    fact = context
+                    if fact.startswith("knowledge: "):
+                        fact = fact[len("knowledge: "):]
+                    ep_words = set(re.findall(r"[a-z0-9_]+", fact.lower()))
                     shared = ep_words & q_words
-                    # Require a substantive shared word. Use len > 2
-                    # (catches "name", "nano") but skip very common
-                    # stopwords (the, is, am, are, do, you, my, to).
                     _STOP = {"the", "is", "am", "are", "do", "you",
-                             "my", "to", "a", "an", "in", "on", "it"}
+                             "my", "to", "a", "an", "in", "on", "it",
+                             "that", "this", "of", "for", "was", "has",
+                             "have", "can", "with", "from", "not", "but"}
                     meaningful = shared - _STOP
                     if meaningful:
-                        hits.append(f"[episode] {context[:200]}")
+                        hits.append(fact[:300])
         except Exception:  # noqa: BLE001
             pass
         seen = []
@@ -435,9 +473,117 @@ class ZerionToolRouter:
                 ok=True, tool="memory_recall",
                 output=(f"I have no stored memory matching \"{query}\". "
                         f"I can store things you ask me to remember."))
+        # Return the facts directly — the model will extract the answer
         return ToolResult(
             ok=True, tool="memory_recall",
-            output="Memory relevant to \"" + query + "\":\n" + "\n".join(seen))
+            output="\n".join(seen))
+
+    def _tool_memory_forget(self, arg: str, _router) -> ToolResult:
+        query = (arg or "").strip()
+        if not query:
+            return ToolResult(ok=False, tool="memory_forget", output="",
+                              error="nothing to forget (empty argument)")
+        episode_store = getattr(self.runtime, "episode_store", None)
+        if episode_store is None:
+            return ToolResult(ok=False, tool="memory_forget", output="",
+                              error="episode store unavailable")
+        q_words = set(re.findall(r"[a-z0-9_]+", query.lower()))
+        removed = 0
+        for ep in list(episode_store.list()):
+            context = str(getattr(ep, "context", "") or "")
+            fact = context
+            if fact.startswith("knowledge: "):
+                fact = fact[len("knowledge: "):]
+            ep_words = set(re.findall(r"[a-z0-9_]+", fact.lower()))
+            shared = ep_words & q_words
+            _STOP = {"the", "is", "am", "are", "do", "you",
+                     "my", "to", "a", "an", "in", "on", "it"}
+            if shared - _STOP:
+                episode_store._episodes.pop(ep.episode_id, None)
+                # Also remove from SQLite
+                try:
+                    import sqlite3 as _sqlite3
+                    conn = _sqlite3.connect(episode_store.db_path)
+                    conn.execute("DELETE FROM episodes WHERE episode_id=?",
+                                 (ep.episode_id,))
+                    conn.commit()
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                removed += 1
+        if removed == 0:
+            return ToolResult(
+                ok=True, tool="memory_forget",
+                output=f"I don't have any stored memory about \"{query}\".")
+        return ToolResult(
+            ok=True, tool="memory_forget",
+            output=f"Forgot {removed} item(s) about \"{query}\".")
+
+    def _tool_memory_correct(self, arg: str, _router) -> ToolResult:
+        correction = (arg or "").strip()
+        if not correction:
+            return ToolResult(ok=False, tool="memory_correct", output="",
+                              error="nothing to correct (empty argument)")
+        episode_store = getattr(self.runtime, "episode_store", None)
+        if episode_store is None:
+            return ToolResult(ok=False, tool="memory_correct", output="",
+                              error="episode store unavailable")
+        from zerion.cognitive_os.episode import (
+            EpisodeMode,
+            EpisodeStatus,
+            ExperienceEpisode,
+        )
+        # Try to find and remove superseded old facts about the same topic.
+        # Extract topic words from the correction to find related old episodes.
+        _STOP = {"the", "is", "am", "are", "do", "you",
+                 "my", "to", "a", "an", "in", "on", "it",
+                 "that", "this", "of", "for", "was", "has",
+                 "have", "can", "with", "from", "not", "but",
+                 "actually", "no", "wrong", "correct", "meant",
+                 "its", "its", "change", "replace", "with"}
+        correction_words = set(
+            re.findall(r"[a-z0-9_]+", correction.lower())) - _STOP
+        removed = 0
+        for ep in list(episode_store.list()):
+            context = str(getattr(ep, "context", "") or "")
+            fact = context
+            if fact.startswith("knowledge: "):
+                fact = fact[len("knowledge: "):]
+            fact_words = set(re.findall(r"[a-z0-9_]+", fact.lower()))
+            shared = fact_words & correction_words
+            meaningful = shared - _STOP
+            # If the old fact shares key topic words with the correction,
+            # it is likely superseded — remove it.
+            if meaningful and any(len(w) > 2 for w in meaningful):
+                episode_store._episodes.pop(ep.episode_id, None)
+                try:
+                    import sqlite3 as _sqlite3
+                    conn = _sqlite3.connect(episode_store.db_path)
+                    conn.execute("DELETE FROM episodes WHERE episode_id=?",
+                                 (ep.episode_id,))
+                    conn.commit()
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                removed += 1
+        # Store the correction as new knowledge
+        episode = ExperienceEpisode(
+            context=f"knowledge: {correction[:500]}",
+            mode=EpisodeMode.OBSERVED,
+            status=EpisodeStatus.COMPLETED,
+            success=True,
+            actions=[{"action": "memory_correct", "detail": correction[:500]}],
+            outcomes=[{"outcome": "corrected", "detail": correction[:500]}],
+            capabilities_used=["memory_correct"],
+        )
+        episode_store.put(episode)
+        if removed:
+            return ToolResult(
+                ok=True, tool="memory_correct",
+                output=f"Updated: {correction} (replaced {removed} old version(s))")
+        return ToolResult(
+            ok=True, tool="memory_correct",
+            output=f"Updated: {correction}")
 
     def _tool_status(self, _arg: str, _router) -> ToolResult:
         if self.readiness is not None:

@@ -240,7 +240,7 @@ class TestToolRouter(_ZerionIdentityTestBase):
             router.execute("memory_store",
                            "remember that the project codename is NEXUS"))
         self.assertTrue(result.ok, result.error)
-        self.assertIn("Stored", result.output)
+        self.assertIn("Learned", result.output)
         # Real persistence in the episodic store.
         self.assertGreaterEqual(runtime.episode_store.count(), 1)
         stored = runtime.episode_store.list()[-1]
