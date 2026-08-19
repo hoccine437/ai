@@ -67,6 +67,9 @@ _MEMORY_STORE_RE = re.compile(
     r"|(?:\S+\s+\+\+\s+is\s+)(?!my\b)(.+)$"
     r"|(?:(\S+)\s+is\s+my\s+(.+)\s*$)"
     r"|(?:I\s+learned\s+that\s+)(.+)$"
+    r"|(?:learn\s+)(.+)$"
+    r"|(?:study\s+)(.+)$"
+    r"|(?:understand\s+)(.+)$"
     r"|(?:classify\s+by\s+)(.+)$"
     r"|(?:the\s+user\s+thinks\s+)(.+)$"
     r"|(?:\w+\s+\w+\s+use\s+)(.+)$"
@@ -210,6 +213,7 @@ class ZerionToolRouter:
                                   "your name", "introduce yourself")):
             return "identity"
         if any(q in low for q in ("what can you do", "what can u do",
+                                  "what u can do", "what u can you do",
                                   "what are your capabilities",
                                   "what capabilities do you have",
                                   "list your capabilities")):
@@ -280,7 +284,11 @@ class ZerionToolRouter:
                 else:
                     m = _MEMORY_RECALL_RE.match(low)
                 if m is not None:
-                    argument = (m.group(1) or "").strip()
+                    # Find the first non-None capture group — patterns
+                    # beyond group 1 still need their captured value.
+                    argument = next(
+                        (g for g in m.groups() if g is not None), ""
+                    ).strip()
             result = tool.handler(argument or user_text, self)
             return result
         except Exception as exc:  # noqa: BLE001 — honest structured failure
