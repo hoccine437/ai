@@ -791,10 +791,19 @@ class AgentRegistry:
                            use_verification: bool = False) -> AgentResult:
         """Execute a task using the best agent(s).
 
-        For simple tasks: uses the best single agent.
-        For complex tasks: can use multiple agents and verification.
+        Automatically determines whether verification is needed based on
+        task complexity and stakes.
         """
-        best_agents = self.select_best(task, top_k=1 if not use_verification else 3)
+        # Auto-detect verification need for complex/high-stakes tasks
+        task_lower = task.lower()
+        complex_signals = ["verify", "check", "validate", "correct",
+                           "security", "critical", "important", "complex",
+                           "multi-step", "plan", "strategy", "debug",
+                           "fix", "error", "failure"]
+        needs_verification = use_verification or any(
+            s in task_lower for s in complex_signals)
+
+        best_agents = self.select_best(task, top_k=1 if not needs_verification else 3)
 
         if not best_agents:
             return AgentResult(
@@ -806,8 +815,8 @@ class AgentRegistry:
         primary = best_agents[0]
         result = await primary.execute(task, context, tool_executor)
 
-        # If verification requested and we have multiple agents
-        if use_verification and len(best_agents) > 1 and result.success:
+        # If verification needed and we have multiple agents
+        if needs_verification and len(best_agents) > 1 and result.success:
             verifier = best_agents[1]
             verify_result = await verifier.execute(
                 f"Verify this result: {result.output[:300]}",
@@ -817,5 +826,9 @@ class AgentRegistry:
                 "agent": verifier.name,
                 "success": verify_result.success,
                 "output": verify_result.output[:200]}
+            # If verification failed, note it in the result
+            if not verify_result.success:
+                result.metadata["verification_warning"] = (
+                    f"Verification by {verifier.name} reported issues")
 
         return result

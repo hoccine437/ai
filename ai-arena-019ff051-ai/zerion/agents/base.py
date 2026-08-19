@@ -49,15 +49,29 @@ class Agent:
         Override in subclasses for domain-specific matching."""
         task_lower = (task_description or "").lower()
         score = 0.0
+        # Specialization matching — highest signal
         for spec in self.specializations:
             if spec.lower() in task_lower:
-                score = max(score, 0.8)
+                score = max(score, 0.85)
         # Domain keyword matching
         domain_words = set(self.domain.lower().split() + self.name.lower().split())
         task_words = set(task_lower.split())
         overlap = domain_words & task_words
         if overlap:
-            score = max(score, min(0.6, 0.3 * len(overlap)))
+            score = max(score, min(0.7, 0.25 * len(overlap)))
+        # Verb-based matching: detect action verbs in task
+        action_verbs = {"write", "create", "build", "fix", "debug", "analyze",
+                        "check", "verify", "run", "execute", "test", "search",
+                        "find", "calculate", "compute", "plan", "design"}
+        task_verbs = set(task_lower.split()) & action_verbs
+        if task_verbs:
+            # Boost score if this agent's domain matches the action
+            domain_set = set(self.domain.lower().split())
+            if task_verbs & domain_set:
+                score = max(score, 0.6)
+        # Success history boost: agents that succeeded before get a small edge
+        if self._execution_count > 0 and self.success_rate() > 0.7:
+            score = min(1.0, score + 0.1)
         return score
 
     async def execute(self, task: str, context: Dict[str, Any],

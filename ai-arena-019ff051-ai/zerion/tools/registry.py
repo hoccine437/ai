@@ -838,20 +838,34 @@ class ToolRegistry:
 
 
     def select_tools(self, task: str, max_tools: int = 5) -> List[Tool]:
-        """Select relevant tools for a task."""
+        """Select relevant tools for a task using multi-signal scoring."""
         task_lower = task.lower()
+        task_words = set(re.findall(r'[a-z_]+', task_lower))
         scored = []
         for t in self._tools.values():
             score = 0.0
+            # Category match (strong signal)
             cat_words = set(t.category.lower().split())
-            desc_words = set(t.description.lower().split())
-            task_words = set(task_lower.split())
-            overlap = (cat_words | desc_words) & task_words
-            if overlap:
-                score = min(1.0, len(overlap) * 0.3)
+            cat_overlap = cat_words & task_words
+            if cat_overlap:
+                score += 0.4 * len(cat_overlap)
+            # Description keyword match
+            desc_words = set(re.findall(r'[a-z]+', t.description.lower()))
+            desc_overlap = desc_words & task_words
+            if desc_overlap:
+                score += 0.3 * len(desc_overlap)
+            # Tool name match (strongest signal)
+            name_words = set(t.name.lower().split("_"))
+            name_overlap = name_words & task_words
+            if name_overlap:
+                score += 0.6 * len(name_overlap)
+            # Exact tool name substring match
             if any(w in task_lower for w in t.name.split("_")):
-                score = max(score, 0.5)
-            if score > 0.1:
+                score = max(score, 0.7)
+            # Usage history boost
+            if t._calls > 0 and t._errors == 0:
+                score = min(2.0, score + 0.1)
+            if score > 0.2:
                 scored.append((score, t))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [t for _, t in scored[:max_tools]]
