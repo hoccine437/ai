@@ -518,10 +518,15 @@ def default_microphone_monitor(on_frame: Optional[Callable] = None,
                                now_fn=None) -> AudioInputMonitor:
     """Pick the REAL monitor the platform permits, else an honest Null
     monitor. Never fabricates a microphone:
+    - ZERION_DISABLE_MIC=1 -> NullMicrophoneMonitor (explicit opt-out)
     - sounddevice present -> SoundDeviceMicrophoneMonitor
     - Termux/Android with termux-api -> TermuxMicrophoneMonitor
     - otherwise -> NullMicrophoneMonitor (exact reason)
     """
+    if os.environ.get("ZERION_DISABLE_MIC", "").strip() in ("1", "true", "yes"):
+        return NullMicrophoneMonitor(
+            reason="Microphone disabled via ZERION_DISABLE_MIC environment variable",
+            now_fn=now_fn)
     if _HAS_SOUNDDEVICE:
         return SoundDeviceMicrophoneMonitor(on_frame=on_frame, now_fn=now_fn)
     try:
