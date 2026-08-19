@@ -24,6 +24,7 @@ The runtime reuses the existing authoritative implementations:
 import asyncio
 from datetime import datetime, timezone
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -446,6 +447,17 @@ class CognitiveRuntime:
             self, identity=self._identity, self_model=self._self_model,
             readiness=self._readiness)
         self.self_critic = ZerionSelfCritic(self)
+
+        # Master intelligence: 21 specialized agents + 100 real tools.
+        # Zerion selects the best agent(s) for each task.
+        try:
+            from zerion.agents.registry import AgentRegistry
+            from zerion.tools.registry import ToolRegistry
+            self.agent_registry = AgentRegistry()
+            self.master_tools = ToolRegistry()
+        except Exception:
+            self.agent_registry = None
+            self.master_tools = None
 
         # Slice 7: self-improvement gate. Real telemetry -> evidence-required
         # bottleneck detection -> improvement proposals -> static analysis /
@@ -1757,12 +1769,52 @@ class CognitiveRuntime:
         result = await self.cognitive_router.execute(
             task, full_prompt, mode=mode, selection=selection)
 
-        # 4) DEEP FIELD: a model-requested tool call is executed against the
-        #    real registry, then the model produces the final response with
-        #    the tool result. Bounded to ONE tool call per turn.
+        # 4) DEEP FIELD: a model-requested tool call or agent call is executed
+        #    against the real registry, then the model produces the final
+        #    response with the result. Bounded to ONE call per turn.
         if result.status == ResultStatus.SUCCESS and result.output:
-            parsed = self.tool_router.parse_model_tool_call(result.output)
-            if parsed is not None:
+            # Check for agent call first: [[AGENT:agent_id|task]]
+            agent_parsed = None
+            agent_match = re.search(
+                r'\[\[\s*AGENT\s*:\s*([A-Za-z0-9_]+)\s*\|\s*(.*?)\s*\]\]',
+                result.output, re.IGNORECASE | re.DOTALL)
+            if agent_match:
+                agent_id = agent_match.group(1).strip()
+                agent_task = agent_match.group(2).strip()
+                registry = getattr(self, 'agent_registry', None)
+                if registry is not None:
+                    agent = registry.get(agent_id)
+                    if agent is not None:
+                        agent_parsed = (agent, agent_task)
+
+            if agent_parsed is not None:
+                agent, agent_task = agent_parsed
+                # Execute through the specialized agent
+                async def _tool_exec(name, arg):
+                    return await self.tool_router.execute(name, arg)
+                agent_result = await agent.execute(
+                    agent_task or prompt, {}, _tool_exec)
+                result.metadata["agent_used"] = agent.name
+                result.metadata["agent_result"] = agent_result.output[:500]
+                # Now ask the model to synthesize the agent's output
+                second = await self.cognitive_router.execute(
+                    task,
+                    full_prompt
+                    + "\n\nAgent " + agent.name + " result:\n"
+                    + agent_result.output[:1000]
+                    + "\n\nSynthesize this into a concise answer for the user.",
+                    mode=mode)
+                if getattr(second, "output", None):
+                    result = second
+                    result.metadata["agent_used"] = agent.name
+                    result.metadata["agent_success"] = True
+                else:
+                    result.output = agent_result.output
+                    result.metadata["agent_success"] = True
+
+            elif not agent_parsed:
+                parsed = self.tool_router.parse_model_tool_call(result.output)
+            if parsed is not None and not agent_parsed:
                 name, arg = parsed
                 tool_result = await self.tool_router.execute(name, arg or prompt)
                 result.metadata["tool_used"] = name

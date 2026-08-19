@@ -278,7 +278,41 @@ class ZerionRuntimeContext:
         if readiness:
             sections.append("Runtime readiness: " + readiness)
 
+        # Master intelligence: 21 agents + 100 tools
+        agents = self._agents_summary()
+        if agents:
+            sections.append(agents)
+        tools = self._tools_summary()
+        if tools:
+            sections.append(tools)
+
         return self._bound("\n\n".join(sections))
+
+    def _agents_summary(self) -> str:
+        try:
+            registry = getattr(self.runtime, "agent_registry", None)
+            if registry is None:
+                return ""
+            count = registry.count()
+            names = [a.name for a in registry.list_all()]
+            return (f"Agent Registry: {count} specialized agents available. "
+                    f"Agents: {', '.join(names)}. "
+                    f"Select the best agent for complex tasks.")
+        except Exception:
+            return ""
+
+    def _tools_summary(self) -> str:
+        try:
+            registry = getattr(self.runtime, "master_tools", None)
+            if registry is None:
+                return ""
+            count = registry.count()
+            cats = {k: len(v) for k, v in registry.by_category().items()}
+            cat_str = ', '.join(f'{k}({v})' for k, v in cats.items())
+            return (f"Tool Registry: {count} real tools available. "
+                    f"Categories: {cat_str}.")
+        except Exception:
+            return ""
 
     def _bound(self, text: str) -> str:
         if len(text) <= self.max_chars:
