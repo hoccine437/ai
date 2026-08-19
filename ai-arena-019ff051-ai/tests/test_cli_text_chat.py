@@ -56,17 +56,39 @@ class _Result:
 
 
 class _FakeRuntime:
-    """Records the canonical text path: execute_task(task, prompt, mode)."""
+    """Records the canonical text path: execute_task(task, prompt, mode).
+
+    Supports conversation context prefixes: script keys are matched
+    against the LAST line of the prompt (after the context block),
+    so both raw prompts and context-wrapped prompts work.
+    """
 
     def __init__(self, script=None):
         self.script = script if script is not None else {}
         self.calls = []
 
+    def _extract_last_line(self, prompt):
+        """Extract the user's actual message from a context-prefixed prompt."""
+        if not prompt:
+            return prompt
+        # Strip the conversation context block if present
+        lines = prompt.strip().split("\n")
+        # If prompt starts with context block, the user message is after
+        # the [END CONTEXT] marker
+        for i, line in enumerate(lines):
+            if line.strip() == "[END CONTEXT]":
+                user_part = "\n".join(lines[i + 1:]).strip()
+                if user_part:
+                    return user_part
+        # No context block — return last non-empty line
+        return lines[-1] if lines else prompt
+
     async def execute_task(self, task, prompt, mode=None):
         self.calls.append((prompt, mode.value if mode is not None else None))
+        user_msg = self._extract_last_line(prompt)
         if callable(self.script):
-            return self.script(prompt)
-        return self.script.get(prompt, _Result("Hello, operator. I am alive."))
+            return self.script(user_msg)
+        return self.script.get(user_msg, _Result("Hello, operator. I am alive."))
 
 
 class _FakeTTS:
@@ -140,7 +162,12 @@ class TestInteractiveChatRepl(unittest.IsolatedAsyncioTestCase):
         self.assertIn("COGNITION   MODEL_BLOCKED", text)
         self.assertIn("RUNTIME     ACTIVE", text)
         # The typed turn went through the REAL runtime execute_task seam.
-        self.assertEqual(runtime.calls, [("Hello Zerion.", "OFFLINE_ONLY")])
+        # The prompt may have a conversation context prefix; extract the
+        # user's actual message for comparison.
+        first_prompt = runtime.calls[0][0]
+        self.assertEqual(runtime._extract_last_line(first_prompt),
+                         "Hello Zerion.")
+        self.assertEqual(runtime.calls[0][1], "OFFLINE_ONLY")
         self.assertIn("YOU > ", text)
         self.assertIn("[ZERION]\nHello back.", text)
         # 'exit' ended the loop cleanly.
@@ -161,8 +188,11 @@ class TestInteractiveChatRepl(unittest.IsolatedAsyncioTestCase):
                       text)
         self.assertIn("returning to input (runtime remains ACTIVE)", text)
         self.assertIn("[ZERION]\nafter the storm", text)
-        self.assertEqual([p for p, _ in runtime.calls if p != ""],
-                         ["boom", "next"])
+        # Prompts may have conversation context prefixes; extract the
+        # user's actual message for comparison.
+        extracted = [runtime._extract_last_line(p)
+                     for p, _ in runtime.calls if p]
+        self.assertEqual(extracted, ["boom", "next"])
 
     async def test_response_is_spoken_through_local_tts_seam(self):
         runtime = _FakeRuntime({"speak this": _Result("spoken text")})

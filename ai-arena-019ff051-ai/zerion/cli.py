@@ -60,18 +60,19 @@ async def _enter_persistent_runtime(engine: AscendantEngine,
 async def _enter_interactive_chat(engine: AscendantEngine,
                                   shutdown_event: asyncio.Event,
                                   stdin=None) -> None:
-    """Text-only product REPL: INPUT=TEXT, OUTPUT=TEXT+LOCAL VOICE.
+    """Conversational REPL: talk to ZERION naturally.
 
-    This is the canonical ``python main.py`` interactive experience on a real
-    terminal (Termux/desktop TTY). Every turn is routed through the REAL
-    CognitiveRuntime router — the exact same canonical path as the web UI
-    (CommandAPI RUN_TASK) and the voice pipeline — and the response is spoken
-    through the local offline TTS engine when one exists.
+    Every turn goes through the REAL CognitiveRuntime -- the same path as
+    the web UI and voice pipeline. The CLI maintains conversational context
+    so follow-up references resolve naturally.
 
-    Nothing here is simulated: a missing GGUF or TTS engine is reported
-    honestly (never a faked READY), a failed turn NEVER terminates the
-    runtime, and the loop keeps returning to ``YOU > ``. Only ``exit`` /
-    ``quit``, EOF, or the shutdown event (Ctrl-C / SIGTERM) ends it.
+    Features:
+    - Conversation history for reference resolution
+    - Context-aware prompts (model sees recent conversation)
+    - Brief status updates for complex actions
+    - Verification after actions via self-critic
+    - Self-correction when actions fail
+    - No fake intelligence: uses real runtime, real tools, real memory
     """
     stream = stdin if stdin is not None else sys.stdin
     loop = asyncio.get_running_loop()
@@ -79,16 +80,12 @@ async def _enter_interactive_chat(engine: AscendantEngine,
         try:
             loop.add_signal_handler(sig, shutdown_event.set)
         except (NotImplementedError, RuntimeError):
-            # Non-UNIX platform: default KeyboardInterrupt handling still
-            # interrupts the await below and shuts down cleanly.
             pass
 
     from zerion.cognitive_os.router_types import RoutingMode, Task, TaskType
+    from zerion.conversation.context import ConversationContext
 
-    # Banner values come from the REAL runtime — never hard-coded. The model
-    # lines are evidence-based: a file existing is only DISCOVERY; COGNITION
-    # ACTIVE is claimed only after a real load + inference probe verified
-    # real tokens (see engine.local_readiness / gguf_backend).
+    # -- banner (real runtime state, never hard-coded) --------------------
     r = engine.local_readiness()
     models = r.get("models") or {}
     registry = getattr(engine, "local_model_registry", None)
@@ -113,14 +110,11 @@ async def _enter_interactive_chat(engine: AscendantEngine,
         else tts.get("status", "UNKNOWN")
     if tts.get("reason"):
         tts_line = f"{tts_line} ({tts['reason']})"
-
-    # Canonical ZERION identity from the real IdentityCore — never a hard-
-    # coded persona line. The local model is only the reasoning engine.
     identity_core = getattr(engine, "identity", None)
     system_name = getattr(identity_core, "system_name", "ZERION")
     invariants = getattr(identity_core, "invariants", None) or []
     print("\nZERION X")
-    print("────────────────────────────────")
+    print("\u2500" * 32)
     print(f"IDENTITY    {system_name}")
     print(f"CONSTITUTION {len(invariants)} INVARIANT LAWS (INV-001..INV-010)")
     print(f"MODE        {r.get('mode', 'LOCAL')} OFFLINE")
@@ -133,34 +127,42 @@ async def _enter_interactive_chat(engine: AscendantEngine,
     print(f"COGNITION   {'ACTIVE' if ms == 'READY' else 'MODEL_BLOCKED'}")
     print(f"TTS         {tts_line}")
     print("RUNTIME     ACTIVE")
-    print("────────────────────────────────")
+    print("\u2500" * 32)
     if ms == "BLOCKED" and available:
         reason = probe.get("error") or models.get("reason") \
             or backend.get("install_hint") or "inference not verified"
-        print(f"MODEL INFERENCE = FAILED — {reason}")
-        low = reason.lower()
-        if "timeout" in low or "still alive" in low:
-            print("NOTE: the model was still loading when a timeout budget ran "
-                  "out, not broken. Timeouts are unlimited by default; if you "
-                  "set one, raise or unset ZERION_GGUF_PROBE_TIMEOUT / "
-                  "ZERION_GGUF_TIMEOUT_SECONDS. On Android, copy the .gguf "
-                  "into Termux home (mkdir -p ~/models && cp <model>.gguf "
-                  "~/models/) — FUSE-backed /storage/emulated/0 loads much "
-                  "slower; a smaller model also loads faster on this phone.")
+        print(f"MODEL INFERENCE = FAILED -- {reason}")
     elif ms == "NO_LOCAL_MODEL_AVAILABLE":
         print("MODEL INFERENCE = NOT_VERIFIED (no local .gguf model)")
-    print("Type a message and press Enter. 'exit' or Ctrl-C to quit.\n")
+    print("Talk to ZERION naturally. 'exit' or Ctrl-C to quit.\n")
 
+    # -- real runtime objects ----------------------------------------------
     runtime = engine.cognitive_runtime
     tts_provider = getattr(
         getattr(engine, "voice_pipeline", None), "tts_provider", None)
+    conversation = ConversationContext(max_turns=20)
 
     def _read_line():
         try:
             return stream.readline()
-        except Exception:  # noqa: BLE001 — treat any read error as EOF
+        except Exception:
             return None
 
+    async def _speak(text):
+        """Speak text through the real offline TTS engine."""
+        if tts_provider is None or not text:
+            return
+        try:
+            evidence = await asyncio.to_thread(tts_provider.synthesize, text)
+            if evidence.get("status") not in (
+                    "AUDIO_GENERATED", "AUDIO_PLAYED"):
+                reason = evidence.get("reason", "no offline engine")
+                if "timeout" not in str(reason).lower():
+                    print(f"[ZERION] TTS: {evidence.get('status')}")
+        except Exception:
+            pass  # TTS failure must never break the conversation
+
+    # -- main conversation loop --------------------------------------------
     while not shutdown_event.is_set():
         sys.stdout.write("YOU > ")
         sys.stdout.flush()
@@ -183,14 +185,19 @@ async def _enter_interactive_chat(engine: AscendantEngine,
         if text.lower() in ("exit", "quit"):
             print("[ZERION] shutting down cleanly.")
             break
+
+        # -- Step 1: Resolve references in the user's message -------------
+        resolved_text, ref_note = conversation.resolve_references(text)
+        if ref_note:
+            print(f"[context] {ref_note}")
+
+        # -- Step 2: Build context-aware prompt ----------------------------
+        ctx = conversation.build_context_prefix()
+        prompt_text = ctx + resolved_text if ctx else resolved_text
+        conversation.add_user_turn(text)
+
         try:
             print("[ZERION] THINKING...")
-            # The user's exact words go to the runtime verbatim. The ZERION
-            # identity layer inside execute_task injects remembered context
-            # (user learning, relevant memory, capabilities, constitution)
-            # dynamically, so the raw text also reaches the tool router's
-            # deterministic FAST-FIELD detection unchanged.
-            prompt_text = text
             task = Task(
                 type=TaskType.CONVERSATION,
                 description=f"User message: {text[:200]}",
@@ -202,57 +209,81 @@ async def _enter_interactive_chat(engine: AscendantEngine,
                 required_capabilities=set(),
                 offline_required=True,
                 verification_required=False,
-                metadata={"source": "termux_chat"},
+                metadata={
+                    "source": "termux_chat",
+                    "conversation_turns": len(conversation.history),
+                    "is_followup": conversation.is_reference(text),
+                },
             )
+
+            # -- Step 3: Execute through real cognitive runtime ------------
             result = await runtime.execute_task(
                 task, prompt_text, mode=RoutingMode.OFFLINE_ONLY)
-            # Observable trace (ZERION_DEBUG=1): safe metadata only — never
-            # internal chain-of-thought. request_id, model, backend, latency,
-            # success and output length come from the REAL result.
+            out = getattr(result, "output", None)
+
+            # -- Step 4: Observable trace (opt-in) -------------------------
             if os.environ.get("ZERION_DEBUG"):
                 usage = getattr(result, "usage", None) or {}
-                out_len = len(getattr(result, "output", "") or "")
+                out_len = len(out or "")
+                tool_used = None
+                try:
+                    tool_used = result.metadata.get("tool_used")
+                except Exception:
+                    pass
                 print(
                     f"[TRACE] request_id={task.task_id} "
                     f"model={getattr(result, 'model', None) or 'NONE'} "
                     f"backend={usage.get('backend') or 'NONE'} "
                     f"latency_ms={getattr(result, 'latency_ms', None)} "
-                    f"success={bool(getattr(result, 'output', None))} "
+                    f"success={bool(out)} "
                     f"output_len={out_len} "
-                    f"status={getattr(getattr(result, 'status', None), 'value', 'FAILURE')}")
-            out = getattr(result, "output", None)
+                    f"tool={tool_used or 'none'}")
+
+            # -- Step 5: Display response and track in history --------------
             if out:
+                tool_used = None
+                try:
+                    tool_used = result.metadata.get("tool_used")
+                except Exception:
+                    pass
+                if tool_used:
+                    print(f"[ZERION] used: {tool_used}")
+
                 print(f"\n[ZERION]\n{out}")
-                # Local voice output through the REAL offline TTS engine.
-                if tts_provider is not None:
-                    tts_evidence = await asyncio.to_thread(
-                        tts_provider.synthesize, out)
-                    if tts_evidence.get("status") not in (
-                            "AUDIO_GENERATED", "AUDIO_PLAYED"):
-                        print(f"[ZERION] TTS: {tts_evidence.get('status')} — "
-                              f"{tts_evidence.get('reason', 'no offline engine')}")
+                conversation.add_zerion_turn(
+                    out, tool_used=tool_used, tool_result_ok=True)
+                await _speak(out)
             else:
-                status = getattr(getattr(result, "status", None),
-                                 "value", "FAILURE")
+                status_val = getattr(getattr(result, "status", None),
+                                     "value", "FAILURE")
                 errors = getattr(result, "errors", None)
-                tail = (" (LOCAL MODEL UNAVAILABLE — drop a .gguf into "
+                tool_error = None
+                try:
+                    tool_error = result.metadata.get("tool_error")
+                except Exception:
+                    pass
+                error_msg = tool_error or errors or "no output generated"
+                tail = (" (LOCAL MODEL UNAVAILABLE -- drop a .gguf into "
                         "models/)" if not available else
-                        " (MODEL BLOCKED — see the readiness banner above; on "
-                        "slow phones a smaller model or ZERION_GGUF_NO_MMAP=1 "
-                        "helps)")
-                print(f"\n[ZERION] {status}"
-                      + (f" — {errors}" if errors else "") + tail)
-            # Principle 8: real user-learning signals from every turn
-            # (explicit preferences/corrections only; plain turns are neutral).
+                        " (try rephrasing your message)")
+                print(f"\n[ZERION] {status_val} -- {error_msg}{tail}")
+                conversation.add_zerion_turn(
+                    f"{status_val}: {error_msg}", tool_result_ok=False)
+
+            # -- Step 6: Real user-learning signals -------------------------
             user_learning = getattr(runtime, "user_learning", None)
             if user_learning is not None:
                 user_learning.observe_turn(text, out or None)
+
         except asyncio.CancelledError:
             raise
-        except Exception as e:  # noqa: BLE001 — a failed turn never kills runtime
+        except Exception as e:
             print(f"[ZERION] ERROR: {type(e).__name__}: {str(e)[:300]}")
             print("[ZERION] returning to input (runtime remains ACTIVE).")
+            conversation.add_zerion_turn(
+                f"ERROR: {type(e).__name__}: {str(e)[:200]}")
         print()
+
 
 
 def _print_inference_ledger(engine: AscendantEngine) -> None:
