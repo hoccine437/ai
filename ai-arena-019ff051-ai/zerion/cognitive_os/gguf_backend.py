@@ -149,6 +149,26 @@ def clean_generated_text(text: str) -> str:
         idx = text.find(marker)
         if idx != -1:
             text = text[:idx]
+    # Strip echoed Qwen chat template tokens.  When the full_prompt uses
+    # <|im_start|>/im_end markers, llama-cli may echo them as literal text.
+    # Only strip when there is real content AFTER the last assistant marker;
+    # otherwise the stub/echo output would be erased entirely.
+    _IM = "<im_start>"
+    _IM_END_TAG = "<im_end>"
+    _asst = text.rfind(_IM + "assistant")
+    if _asst != -1:
+        _after = _asst + len(_IM + "assistant")
+        if _after < len(text) and text[_after] in "\n\r":
+            _after += 1
+        _remaining = text[_after:].strip()
+        if _remaining:
+            text = text[_after:]
+    elif _IM in text and _IM_END_TAG in text:
+        _e = text.rfind(_IM_END_TAG)
+        if _e != -1:
+            _remaining = text[_e + len(_IM_END_TAG):].strip()
+            if _remaining:
+                text = text[_e + len(_IM_END_TAG):]
     return normalize_model_output(text)
 
 
