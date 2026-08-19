@@ -356,7 +356,7 @@ class TestSelfCritic(unittest.IsolatedAsyncioTestCase):
         runtime = self._runtime()
 
         def script(prompt):
-            return "corrected by critique" if "Critique" in prompt \
+            return "corrected by critique" if any(w in prompt for w in ("Critique", "Analyze", "critique", "analyze")) \
                 else "uncertain"
         self.stub.script = script
         critic = ZerionSelfCritic(runtime)
@@ -366,7 +366,7 @@ class TestSelfCritic(unittest.IsolatedAsyncioTestCase):
                                         full_prompt=full_prompt)
         # The stub receives the critique prompt and returns the correction.
         self.assertTrue(self.stub.calls)
-        self.assertIn("Critique", self.stub.calls[-1])
+        self.assertTrue(any(w in self.stub.calls[-1] for w in ("Critique", "Analyze", "critique", "analyze")))
         self.assertEqual(revised, "corrected by critique")
 
 

@@ -332,11 +332,33 @@ class ZerionToolRouter:
     # -- real local tools ---------------------------------------------------
 
     def _tool_greeting(self, _arg: str, _router) -> ToolResult:
+        # Context-aware greeting: check time of day and system state
+        from datetime import datetime
+        hour = datetime.now().hour
+        if hour < 6:
+            time_greeting = "Good night"
+        elif hour < 12:
+            time_greeting = "Good morning"
+        elif hour < 18:
+            time_greeting = "Good afternoon"
+        else:
+            time_greeting = "Good evening"
+        # Check if there are active goals or recent activity
+        status_hint = ""
+        try:
+            obj = getattr(_router.runtime, "objectives", None)
+            if obj:
+                active = obj.list_active_objectives()
+                if active:
+                    status_hint = (f" I see you have {len(active)} active "
+                                   f"objective(s). Ready to continue.")
+        except Exception:  # noqa: BLE001
+            pass
         return ToolResult(
             ok=True, tool="greeting",
-            output="Hello! I am ZERION, your autonomous cognitive assistant. "
-                   "I run entirely on your local device with no cloud connection. "
-                   "How can I help you today?")
+            output=f"{time_greeting}! I am ZERION, your autonomous cognitive "
+                   f"assistant. I run entirely on your local device with no "
+                   f"cloud connection.{status_hint} How can I help you today?")
 
     def _tool_identity(self, _arg: str, _router) -> ToolResult:
         try:
@@ -363,16 +385,36 @@ class ZerionToolRouter:
 
     def _tool_capabilities(self, _arg: str, _router) -> ToolResult:
         caps = self._capability_names()
-        if not caps:
+        # Also include agent and tool counts for full picture
+        agent_count = 0
+        tool_count = 0
+        try:
+            reg = getattr(_router.runtime, "agent_registry", None)
+            if reg:
+                agent_count = reg.count()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            tr = getattr(_router.runtime, "master_tools", None)
+            if tr:
+                tool_count = tr.count()
+        except Exception:  # noqa: BLE001
+            pass
+        parts = []
+        if caps:
+            parts.append("Core capabilities: " + ", ".join(caps))
+        if agent_count:
+            parts.append(f"Specialized agents: {agent_count}")
+        if tool_count:
+            parts.append(f"Real tools: {tool_count}")
+        if not parts:
             return ToolResult(
                 ok=False, tool="capabilities",
                 output="",
-                error="capability registry is empty — no capability can be "
-                      "claimed or executed")
+                error="no capabilities registered")
         return ToolResult(
             ok=True, tool="capabilities",
-            output="I can execute these capabilities from my real registry: "
-                   + ", ".join(caps) + ".")
+            output="I have: " + ". ".join(parts) + ".")
 
     def _capability_names(self) -> List[str]:
         caps: List[str] = []

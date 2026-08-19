@@ -95,10 +95,14 @@ class ZerionSelfCritic:
         original = str(getattr(result, "output", "") or "")
         critique_prompt = (
             full_prompt
-            + "\n\nCritique the previous answer for errors, missing "
-              "verification, or overconfidence. If it needs correction, "
-              "give the corrected answer now as ZERION. If it was correct, "
-              "restate it more precisely.")
+            + "\n\nYou are ZERION's self-critic. Analyze the previous answer:\n"
+              "1. Is the answer factually correct? Check each claim.\n"
+              "2. Does it directly answer what was asked?\n"
+              "3. Is it concise and clear?\n"
+              "4. Are there any logical gaps or unsupported assertions?\n"
+              "5. Is the confidence level appropriate?\n"
+              "If corrections are needed, provide the corrected answer as ZERION. "
+              "If the answer is solid, confirm it with a brief explanation of why.")
         try:
             revised = await self.runtime.cognitive_router.execute(
                 task, critique_prompt, mode=getattr(result, "mode", None))
@@ -122,8 +126,15 @@ class ZerionSelfCritic:
             stakes = float(getattr(task, "stakes", 0.0) or 0.0)
         except Exception:  # noqa: BLE001
             return "FAST"
-        if (uncertainty + novelty + difficulty + stakes) >= 1.2:
+        score = uncertainty + novelty + difficulty + stakes
+        if score >= 1.2:
             return "DEEP"
         if max(uncertainty, novelty) >= 0.5:
+            return "DEEP"
+        # Also DEEP for high-stakes or complex tool chains
+        meta = getattr(task, "metadata", None) or {}
+        if meta.get("tool_used") or meta.get("agent_used"):
+            return "DEEP"
+        if stakes >= 0.7:
             return "DEEP"
         return "FAST"
