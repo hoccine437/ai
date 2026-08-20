@@ -105,9 +105,8 @@ class LegacyOpenAIAdapter:
 
 
 class LegacyGeminiAdapter:
-    """Wraps the legacy GeminiProvider. The legacy provider has NO real API
-    integration — it always returns a labeled fallback. Honest status:
-    NOT_CONFIGURED without a key, UNAVAILABLE with one."""
+    """Wraps the GeminiProvider. Now has REAL API integration using stdlib
+    urllib — no SDK required. AVAILABLE when GEMINI_API_KEY is set."""
 
     provider_name = "gemini"
     is_local = False
@@ -118,12 +117,20 @@ class LegacyGeminiAdapter:
         self._configured = bool(os.environ.get("GEMINI_API_KEY", ""))
 
     async def generate(self, call: ProviderCall) -> RawProviderResponse:
-        # No real integration exists in the legacy provider — never return its
-        # canned fallback as if it were model output.
+        resp = await self._provider.generate_response(
+            call.prompt, model_id=call.model_id)
+        if resp.execution_mode.value == "REAL_MODEL_RESPONSE":
+            return RawProviderResponse(
+                output=resp.content, latency_ms=resp.latency_ms,
+                usage={"prompt_tokens": resp.prompt_tokens,
+                       "completion_tokens": resp.completion_tokens,
+                       "cost_cents": resp.cost_cents},
+                success=True)
+        # Gemini call failed — structured failure
         return RawProviderResponse(
             output=None, success=False,
             failure_kind=ProviderFailureKind.PROVIDER_UNAVAILABLE,
-            error="gemini API integration not implemented")
+            error=resp.content[:200] if resp.content else "gemini call failed")
 
     async def stream(self, call: ProviderCall) -> AsyncIterator[RawProviderResponse]:
         raise NotImplementedError("gemini adapter: streaming not supported")
@@ -131,6 +138,8 @@ class LegacyGeminiAdapter:
     async def health_check(self) -> ProviderStatus:
         if not self._configured:
             return ProviderStatus.NOT_CONFIGURED
+        if self._provider.is_available():
+            return ProviderStatus.AVAILABLE
         return ProviderStatus.UNAVAILABLE
 
     def capabilities(self) -> Set[str]:
@@ -140,9 +149,9 @@ class LegacyGeminiAdapter:
         return [ModelInfo(
             model_id=self._default_model, provider=self.provider_name,
             capabilities=self.capabilities(),
-            status=(ProviderStatus.UNAVAILABLE if self._configured
+            status=(ProviderStatus.AVAILABLE if self._configured
                     else ProviderStatus.NOT_CONFIGURED),
-            status_reason=("no API integration implemented" if self._configured
+            status_reason=("real API integration (stdlib urllib)" if self._configured
                            else "missing GEMINI_API_KEY"),
             format="api")]
 

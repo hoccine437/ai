@@ -647,10 +647,13 @@ class TestI014UnknownMetricsNotReportedAsSuccess(unittest.TestCase):
                       uncertainty=0.4, novelty=0.4, stakes=0.2,
                       goal_relevance=0.5),
             prompt="hi", model_id="gemini-model")
-        resp = _run(LegacyGeminiAdapter().generate(call))
+        adapter = LegacyGeminiAdapter()
+        resp = _run(adapter.generate(call))
+        # Without GEMINI_API_KEY, adapter returns a structured failure
+        # (not canned model text). Error message indicates the real reason.
         self.assertFalse(resp.success)
         self.assertIsNone(resp.output)
-        self.assertIn("not implemented", resp.error)
+        self.assertTrue(resp.error)  # Error must explain why
 
     def test_offline_router_with_no_local_model_returns_structured_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

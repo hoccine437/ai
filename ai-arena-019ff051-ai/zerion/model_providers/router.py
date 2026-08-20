@@ -2,6 +2,12 @@
 Cognitive Router Substrate for ZERION-X
 Dynamically calculates Cognitive Depth Score (D0 to D6) and routes tasks across available model providers
 with zero-downtime provider failover and cost optimization.
+
+Provider priority:
+  1. Gemini (when GEMINI_API_KEY is set) — fast, free tier, good quality
+  2. OpenAI (when OPENAI_API_KEY is set) — fallback for deep reasoning
+  3. Local GGUF (when model file exists) — offline fallback
+  4. Deterministic — always available, no model needed
 """
 
 from enum import Enum
@@ -29,8 +35,8 @@ class CognitiveRouter:
         from zerion.cognitive_os.gguf_discovery import resolve_models_dir
         models_dir = resolve_models_dir(models_dir)
         self.providers: Dict[str, ModelProvider] = {
-            "openai": OpenAIProvider(),
             "gemini": GeminiProvider(),
+            "openai": OpenAIProvider(),
             "local_gguf": LocalGGUFProvider(models_dir=models_dir),
             "deterministic_local": DeterministicFallbackProvider()
         }
@@ -75,12 +81,21 @@ class CognitiveRouter:
         is_voice: bool = False,
         is_offline: bool = False
     ) -> ModelResponse:
-        """Executes task through best available provider with automatic graceful failover."""
-        # 1. Voice requests prioritize Gemini provider
-        if is_voice and not is_offline:
-            gemini = self.providers.get("gemini")
-            if gemini and gemini.is_available():
-                return await gemini.generate_response(prompt)
+        """Executes task through best available provider with automatic graceful failover.
+
+        Provider priority:
+          1. Gemini (primary — fast, free, good quality)
+          2. OpenAI (fallback for deep reasoning when Gemini fails)
+          3. Local GGUF (offline fallback)
+          4. Deterministic (always available, no model needed)
+        """
+        # 1. If a specific provider is requested, try it first
+        if preferred_provider and preferred_provider in self.providers:
+            provider = self.providers[preferred_provider]
+            if provider.is_available():
+                res = await provider.generate_response(prompt)
+                if not res.is_fallback:
+                    return res
 
         # 2. Offline requests route to local GGUF or deterministic engine
         if is_offline:
@@ -89,20 +104,30 @@ class CognitiveRouter:
                 return await gguf.generate_response(prompt)
             return await self.providers["deterministic_local"].generate_response(prompt)
 
-        # 3. High-depth / deep reasoning routes to OpenAI or local fallback
-        if depth in (CognitiveDepthLevel.D3_MULTI_HYPOTHESIS, CognitiveDepthLevel.D4_EXPERIMENT, CognitiveDepthLevel.D5_ADVERSARIAL, CognitiveDepthLevel.D6_ARCHITECTURE):
+        # 3. Gemini is the PRIMARY provider (when configured)
+        gemini = self.providers.get("gemini")
+        if gemini and gemini.is_available():
+            res = await gemini.generate_response(prompt)
+            if not res.is_fallback:
+                return res
+
+        # 4. High-depth reasoning falls back to OpenAI if Gemini fails
+        if depth in (CognitiveDepthLevel.D3_MULTI_HYPOTHESIS,
+                     CognitiveDepthLevel.D4_EXPERIMENT,
+                     CognitiveDepthLevel.D5_ADVERSARIAL,
+                     CognitiveDepthLevel.D6_ARCHITECTURE):
             openai = self.providers.get("openai")
             if openai and openai.is_available():
                 res = await openai.generate_response(prompt, model_id="gpt-4o")
                 if not res.is_fallback:
                     return res
 
-        # 4. Standard fast pass
+        # 5. Standard fast pass via OpenAI
         openai_fast = self.providers.get("openai")
         if openai_fast and openai_fast.is_available():
             res = await openai_fast.generate_response(prompt, model_id="gpt-4o-mini")
             if not res.is_fallback:
                 return res
 
-        # 5. Deterministic local failover
+        # 6. Deterministic local failover (always works, no model needed)
         return await self.providers["deterministic_local"].generate_response(prompt)

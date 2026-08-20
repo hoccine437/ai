@@ -646,9 +646,13 @@ async def run_cli():
             # say so instead of appearing hung. The probe waits as long as it
             # takes (unlimited by default); ZERION_GGUF_PROBE_TIMEOUT bounds
             # the wait for users who want one.
-            print("[ZERION] Verifying local model readiness — the probe really "
-                  "loads the .gguf and waits as long as it takes (unlimited "
-                  "by default; set ZERION_GGUF_PROBE_TIMEOUT to bound it).")
+            # Mode-aware startup: skip heavy GGUF probe when Gemini is configured
+            gemini_key = os.environ.get("GEMINI_API_KEY", "")
+            if gemini_key:
+                print("[ZERION] Gemini API detected — using cloud inference.")
+            else:
+                print("[ZERION] No cloud API key — using local offline mode.")
+                print("[ZERION] Verifying local model readiness...")
             _print_readiness(engine)
             n = max(1, args.cycles)
             print(f"[GENESIS X10] Executing {n} autonomous developmental flywheel cycle(s)...")
@@ -687,7 +691,16 @@ def _print_readiness(engine: AscendantEngine) -> None:
     """
     r = engine.local_readiness()
     print("\n================ ZERION LOCAL READINESS ================")
-    print(f"MODE:            {r['mode']}")
+    # Show the active mode based on what's actually configured
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if gemini_key:
+        active_mode = "GEMINI (cloud)"
+    elif openai_key:
+        active_mode = "OPENAI (cloud)"
+    else:
+        active_mode = r.get('mode', 'LOCAL')
+    print(f"MODE:            {active_mode}")
     mic = r["microphone"]
     print(f"MICROPHONE:      {mic['status']}"
           + (f"  ({mic['reason']})" if mic.get("reason") else ""))
@@ -730,9 +743,13 @@ def _print_readiness(engine: AscendantEngine) -> None:
     print(f"UI BRIDGE:       {r['ui']['status']}")
     print(f"NETWORK:         {r['network'].get('state')} "
           f"(LOCAL cognition never requires it)")
-    print(f"KEYS:            OPENAI={r['keys']['OPENAI_API_KEY']} "
-          f"GEMINI={r['keys']['GEMINI_API_KEY']} "
-          f"(none required for LOCAL mode)")
+    # Show which API keys are configured
+    openai_status = r['keys']['OPENAI_API_KEY']
+    gemini_status = r['keys']['GEMINI_API_KEY']
+    if gemini_key:
+        gemini_status = "CONFIGURED (active)"
+    print(f"KEYS:            OPENAI={openai_status} "
+          f"GEMINI={gemini_status}")
 
 
 def main():

@@ -17,3 +17,7 @@ data_eval/
 env/
 venv/
 ENV/
+-e 
+# Model files (large, not tracked)
+models/
+*.gguf
