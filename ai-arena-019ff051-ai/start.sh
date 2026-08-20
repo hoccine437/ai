@@ -12,6 +12,9 @@
 
 set -e
 
+# Disable microphone by default (user can override with ZERION_DISABLE_MIC=0)
+export ZERION_DISABLE_MIC="${ZERION_DISABLE_MIC:-1}"
+
 BACKEND_PORT="${BACKEND_PORT:-8080}"
 UI_PORT="${UI_PORT:-3000}"
 
@@ -62,24 +65,17 @@ case "${1:-}" in
     fi
 
     # Start the Next.js UI in foreground
-    echo "[ZERION] Starting Next.js UI on port $UI_PORT..."
-    cd ZERION-UI-main
-    npx next dev --port "$UI_PORT" --hostname 0.0.0.0 &
-    UI_PID=$!
-
     echo ""
-    echo "[ZERION] Both services started."
-    echo "  Backend PID: $BACKEND_PID"
-    echo "  UI PID:      $UI_PID"
-    echo ""
-    echo "  Open http://localhost:$UI_PORT in your phone browser."
-    echo "  Press Ctrl+C to stop both."
+    echo "[ZERION] Backend started on port $BACKEND_PORT"
+    echo "  Open http://localhost:$BACKEND_PORT in your phone browser."
+    echo "  The UI is served from the Python backend."
+    echo "  Press Ctrl+C to stop."
     echo ""
 
-    # Trap Ctrl+C to kill both
-    trap "kill $BACKEND_PID $UI_PID 2>/dev/null; echo '[ZERION] Stopped.'; exit 0" INT TERM
+    # Trap Ctrl+C to kill backend
+    trap "kill $BACKEND_PID 2>/dev/null; echo '[ZERION] Stopped.'; exit 0" INT TERM
 
-    # Wait for either to exit
-    wait
+    # Wait for backend to exit
+    wait $BACKEND_PID
     ;;
 esac

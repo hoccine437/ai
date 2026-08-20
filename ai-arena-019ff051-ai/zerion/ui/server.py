@@ -154,6 +154,38 @@ class GenesisWebServer:
                 }
                 self._send_response(writer, 200, "application/json", json.dumps(res).encode("utf-8"))
 
+            elif method == "POST" and path == "/api/chat":
+                # Chat endpoint: receives user message, runs through cognitive runtime
+                try:
+                    payload = json.loads(body_bytes.decode(errors="replace") or "{}")
+                    message = payload.get("message", "")
+                    if not message:
+                        self._send_response(writer, 400, "application/json",
+                                           b'{"error": "No message provided"}')
+                        return
+                    # Run through the real cognitive runtime
+                    from zerion.cognitive_os.router_types import RoutingMode, Task, TaskType
+                    task = Task(
+                        type=TaskType.CONVERSATION,
+                        description=f"UI chat: {message[:200]}",
+                        difficulty=0.3, uncertainty=0.4, novelty=0.3,
+                        stakes=0.1, goal_relevance=0.5,
+                        required_capabilities=set(),
+                        offline_required=False,
+                        verification_required=False,
+                        metadata={"source": "web_ui"},
+                    )
+                    runtime = self.engine.cognitive_runtime
+                    result = await runtime.execute_task(
+                        task, message, mode=RoutingMode.AUTO)
+                    output = getattr(result, "output", None)
+                    reply = output or f"[{getattr(result.status, 'value', 'ERROR')}] No response generated."
+                    res = {"reply": reply, "status": getattr(result.status, "value", "ERROR")}
+                except Exception as e:
+                    res = {"reply": f"Error: {type(e).__name__}: {str(e)[:200]}", "status": "ERROR"}
+                self._send_response(writer, 200, "application/json",
+                                   json.dumps(res).encode("utf-8"))
+
             elif method == "GET" and path == "/api/episodes":
                 eps = [e.to_dict() for e in self.engine.foundry.episode_store.list_episodes()]
                 self._send_response(writer, 200, "application/json", json.dumps(eps).encode("utf-8"))

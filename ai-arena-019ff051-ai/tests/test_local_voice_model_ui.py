@@ -484,14 +484,11 @@ class TestUIEventMapping(unittest.TestCase):
             "zerion", "ui", "index.html"))
         with open(html, "r", encoding="utf-8") as f:
             content = f.read()
-        # The new 3D orb UI: WebGL init, real mic capture, real state fetch.
-        self.assertIn("initGL", content)
-        self.assertIn("getUserMedia", content)
-        self.assertIn("/api/voice/audio-rms", content)
-        self.assertIn("/api/ui-state", content)
-        self.assertIn("/api/stream", content)
-        # No fake "simulated voice stream" claim remains.
-        self.assertNotIn("simulated voice stream", content)
+        # Simple chat UI: title, chat window, input area, API endpoints
+        self.assertIn("Zerion AI", content)
+        self.assertIn("/api/chat", content)
+        self.assertIn("/api/status", content)
+        self.assertIn("sendMessage", content)
 
 
 if __name__ == "__main__":

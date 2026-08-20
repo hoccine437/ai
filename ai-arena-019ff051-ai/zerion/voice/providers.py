@@ -699,7 +699,7 @@ class LocalTextToSpeechProvider:
         return self.detect().status == VoiceEngineStatus.AVAILABLE
 
     def synthesize(self, text: str, out_path: Optional[str] = None,
-                   timeout_s: float = 15.0) -> Dict[str, Any]:
+                   timeout_s: float = 30.0) -> Dict[str, Any]:
         return self.env.synthesize(text, out_path=out_path, timeout_s=timeout_s)
 
     def install_hint(self) -> str:

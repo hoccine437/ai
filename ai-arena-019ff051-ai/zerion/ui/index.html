@@ -1,788 +1,269 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>ZERION X — COGNITIVE CORE</title>
-<style>
-  :root {
-    --bg: #000000;
-    --blue-deep: #06233f;
-    --blue-core: #0a4f8a;
-    --blue-electric: #1e90ff;
-    --blue-cyan: #4fd8ff;
-    --amber: #ffb347;
-    --red-dim: #b3544e;
-    --text-dim: #4a6a88;
-    --text: #9fc4e8;
-    --text-bright: #d8ecff;
-    --mono: "SF Mono", "Cascadia Code", Consolas, "Roboto Mono", monospace;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; background: var(--bg); overflow: hidden; }
-  body { font-family: var(--mono); color: var(--text); }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zerion AI</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #09090b;
+            --panel-bg: #18181b;
+            --accent: #71717a;
+            --text-main: #ffffff;
+            --text-sub: #a1a1aa;
+            --input-bg: #27272a;
+        }
 
-  #orb-stage { position: fixed; inset: 0; }
-  #orb-stage canvas { display: block; width: 100%; height: 100%; }
-  /* soft ambient glow behind the orb (pure CSS, no GPU 3D cost) */
-  #orb-stage::after {
-    content: ""; position: absolute; left: 50%; top: 50%;
-    width: 62vmin; height: 62vmin; transform: translate(-50%, -50%);
-    background: radial-gradient(circle, rgba(10,79,138,0.22) 0%, rgba(6,35,63,0.10) 40%, transparent 70%);
-    border-radius: 50%; pointer-events: none;
-  }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', sans-serif;
+        }
 
-  #hud {
-    position: fixed; inset: 0; pointer-events: none; z-index: 5;
-    padding: max(16px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right))
-             max(16px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
-    display: flex; flex-direction: column; justify-content: space-between;
-  }
-  #hud .row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-  #hud .left, #hud .right { font-size: 11px; letter-spacing: 1.5px; line-height: 1.9; }
-  #hud .label { color: var(--text-dim); }
-  #hud .value { color: var(--text-bright); }
-  #state-line { font-size: 15px; letter-spacing: 4px; color: var(--blue-cyan); text-shadow: 0 0 12px rgba(79,216,255,0.35); }
-  #mic-line { color: var(--text); }
-  #mic-line.ok { color: var(--blue-cyan); }
-  #mic-line.bad { color: var(--amber); }
-  #model-line { color: var(--text); }
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
 
-  #controls {
-    pointer-events: auto; display: flex; gap: 10px; align-items: center;
-    background: rgba(6, 20, 34, 0.55); border: 1px solid rgba(30,144,255,0.18);
-    border-radius: 10px; padding: 8px 10px; backdrop-filter: blur(6px);
-    max-width: 640px; width: 100%;
-  }
-  #controls button {
-    pointer-events: auto; cursor: pointer; background: transparent;
-    color: var(--blue-cyan); border: 1px solid rgba(79,216,255,0.4);
-    border-radius: 7px; font-family: var(--mono); font-size: 11px;
-    letter-spacing: 1.5px; padding: 8px 12px; white-space: nowrap;
-    transition: border-color 0.2s, color 0.2s, background 0.2s;
-  }
-  #controls button:hover { border-color: var(--blue-cyan); background: rgba(79,216,255,0.08); }
-  #controls button.active { background: rgba(79,216,255,0.16); color: var(--text-bright); }
-  #controls input[type=text] {
-    pointer-events: auto; flex: 1; min-width: 0; background: transparent;
-    border: none; border-bottom: 1px solid rgba(30,144,255,0.35); outline: none;
-    color: var(--text-bright); font-family: var(--mono); font-size: 12px; padding: 6px 4px;
-  }
-  #controls input[type=text]::placeholder { color: var(--text-dim); }
+        .container {
+            width: 100%;
+            max-width: 700px;
+            height: 90vh;
+            background: var(--panel-bg);
+            border-radius: 20px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border: 1px solid #27272a;
+        }
 
-  #transcript {
-    pointer-events: none; position: fixed; left: 50%; bottom: max(18px, env(safe-area-inset-bottom));
-    transform: translateX(-50%); width: min(720px, calc(100vw - 36px)); z-index: 6;
-    font-size: 11px; line-height: 1.8; letter-spacing: 0.5px; color: var(--text);
-    background: linear-gradient(transparent, rgba(0,0,0,0.82));
-    padding: 20px 8px 0; max-height: 30vh; overflow: hidden;
-  }
-  #transcript .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #transcript .t.user { color: var(--blue-cyan); }
-  #transcript .t.zerion { color: var(--text-bright); }
-  #transcript .t.err { color: var(--amber); }
+        /* Header */
+        header {
+            padding: 20px;
+            border-bottom: 1px solid #27272a;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
 
-  #webgl-fallback-note {
-    position: fixed; bottom: 96px; left: 50%; transform: translateX(-50%);
-    font-size: 10px; letter-spacing: 1px; color: var(--text-dim); z-index: 7;
-  }
-</style>
+        .logo {
+            font-weight: 600;
+            letter-spacing: 2px;
+            font-size: 1.2rem;
+            color: var(--text-main);
+        }
+
+        .status {
+            font-size: 0.75rem;
+            color: var(--text-sub);
+            margin-left: auto;
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #22c55e;
+            margin-right: 5px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Chat Window */
+        .chat-window {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .message {
+            padding: 12px 16px;
+            border-radius: 12px;
+            max-width: 80%;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            word-wrap: break-word;
+        }
+
+        .message.ai {
+            background: #27272a;
+            align-self: flex-start;
+        }
+
+        .message.user {
+            background: #3f3f46;
+            align-self: flex-end;
+        }
+
+        .thinking {
+            color: var(--text-sub);
+            font-style: italic;
+            font-size: 0.85rem;
+            align-self: flex-start;
+            padding: 8px 16px;
+        }
+
+        /* Bottom Input Section */
+        .input-area {
+            padding: 20px;
+            background: var(--panel-bg);
+            border-top: 1px solid #27272a;
+        }
+
+        .input-wrapper {
+            display: flex;
+            background: var(--input-bg);
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid #3f3f46;
+        }
+
+        input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            padding: 15px;
+            color: white;
+            outline: none;
+            font-size: 0.95rem;
+        }
+
+        input::placeholder {
+            color: var(--text-sub);
+        }
+
+        button {
+            background: #71717a;
+            border: none;
+            color: white;
+            padding: 0 20px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #a1a1aa;
+        }
+
+        button:disabled {
+            background: #3f3f46;
+            cursor: not-allowed;
+        }
+    </style>
 </head>
 <body>
 
-<div id="orb-stage"></div>
+    <div class="container">
+        <header>
+            <div class="logo">ZERION</div>
+            <div class="status">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">Connecting...</span>
+            </div>
+        </header>
 
-<div id="hud">
-  <div class="row">
-    <div class="left">
-      <div class="label">ZERION X</div>
-      <div id="state-line">BOOTING</div>
-      <div class="label" id="mode-line">MODE: —</div>
+        <div class="chat-window" id="chat">
+            <div class="message ai">Hello, I am Zerion. How can I assist you today?</div>
+        </div>
+
+        <div class="input-area">
+            <div class="input-wrapper">
+                <input type="text" id="userInput" placeholder="Type your message here..." onkeydown="if(event.key==='Enter') sendMessage()">
+                <button id="sendBtn" onclick="sendMessage()">Send</button>
+            </div>
+        </div>
     </div>
-    <div class="right">
-      <div><span class="label">MIC </span><span id="mic-line" class="bad">UNKNOWN</span></div>
-      <div><span class="label">STT </span><span id="stt-line">—</span></div>
-      <div><span class="label">TTS </span><span id="tts-line">—</span></div>
-      <div><span class="label">MODEL </span><span id="model-line">—</span></div>
-      <div><span class="label">RUNTIME </span><span id="runtime-line">—</span></div>
-    </div>
-  </div>
-  <div id="controls">
-    <button id="btnMic">🎙 START</button>
-    <button id="btnListen">LISTENING: OFF</button>
-    <input id="cmdInput" type="text" placeholder="type a command — or say “Zerion, …”" autocomplete="off">
-    <button id="btnSend">SEND</button>
-  </div>
-</div>
 
-<div id="transcript"></div>
-<div id="webgl-fallback-note" style="display:none">2D ORB FALLBACK — WEBGL UNAVAILABLE</div>
+    <script>
+        const chat = document.getElementById('chat');
+        const input = document.getElementById('userInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        let isProcessing = false;
 
-<script>
-"use strict";
-/* =========================================================================
- * ZERION X — COGNITIVE CORE 3D ORB
- * The UI observes the runtime. It decides nothing: no goals, no reasoning,
- * no model selection, no permissions. Every status shown comes from the
- * /api/ui-state snapshot or the /api/stream event feed — never hard-coded.
- * ======================================================================= */
+        // Check backend status on load
+        fetch('/api/status')
+            .then(r => r.json())
+            .then(data => {
+                statusDot.style.background = '#22c55e';
+                statusText.textContent = 'Online';
+            })
+            .catch(() => {
+                statusDot.style.background = '#ef4444';
+                statusText.textContent = 'Offline';
+            });
 
-/* ---------- device tier (performance budget) ---------- */
-function detectTier() {
-  const nav = navigator;
-  const mem = (nav.deviceMemory || 4);
-  const cores = (nav.hardwareConcurrency || 4);
-  if (mem <= 2 || cores <= 2) return "low";
-  if (mem <= 4 || cores <= 4) return "mid";
-  return "high";
-}
-const TIER = detectTier();
-const PARTICLE_BUDGET = TIER === "high" ? 2200 : (TIER === "mid" ? 1200 : 600);
-const INNER_BUDGET = Math.max(120, Math.floor(PARTICLE_BUDGET * 0.22));
+        function sendMessage() {
+            const text = input.value.trim();
+            if (text === "" || isProcessing) return;
 
-/* ---------- real runtime state (never fabricated) ---------- */
-let uiState = { presentation: {}, voice: {}, models: {}, system: {}, network: {} };
-let audioRms = 0;          // real mic RMS (float 0..1) from the analyser
-let serverRms = 0;         // server-reported amplitude while SPEAKING
-let lastRmsPost = 0;       // throttled POST to /api/voice/audio-rms
-let micAvailable = false;
-let micError = null;
-let listening = false;     // engine LISTENING state (real, from snapshot)
-let recognition = null;
-let recognitionStopped = false;
+            isProcessing = true;
+            sendBtn.disabled = true;
 
-const $ = (id) => document.getElementById(id);
-const stateLine = $("state-line");
-const micLine = $("mic-line");
-const sttLine = $("stt-line");
-const ttsLine = $("tts-line");
-const modelLine = $("model-line");
-const runtimeLine = $("runtime-line");
-const modeLine = $("mode-line");
-const transcriptBox = $("transcript");
+            // Add User Message
+            const userMsg = document.createElement('div');
+            userMsg.className = 'message user';
+            userMsg.textContent = text;
+            chat.appendChild(userMsg);
 
-/* ---------- orb state -> animation params ---------- */
-function orbParams(state, micStatus) {
-  // state: presentation.runtime_state (REAL) — e.g. IDLE / LISTENING /
-  // THINKING / EXECUTING / SPEAKING / ERROR / DEGRADED / OFFLINE
-  const p = { rot: 0.12, pulse: 0.035, speed: 1.0, swirl: 0.0, audioGain: 0.0,
-              alpha: 1.0, color: [0.12, 0.52, 1.0], inner: 1.0, err: false };
-  const s = String(state || "IDLE").toUpperCase();
-  if (s === "BOOTING") { p.rot = 0.4; p.pulse = 0.05; p.speed = 0.6; }
-  else if (s === "LISTENING") {
-    p.rot = 0.45; p.pulse = 0.075; p.speed = 1.4; p.audioGain = 0.2;
-  } else if (s === "TRANSCRIBING") { p.rot = 0.7; p.swirl = 1.0; p.pulse = 0.06; p.speed = 1.8; }
-  else if (s === "THINKING") { p.rot = 0.8; p.swirl = 1.0; p.pulse = 0.05; p.speed = 2.2; }
-  else if (s === "EXECUTING") { p.rot = 0.6; p.pulse = 0.11; p.speed = 2.6; }
-  else if (s === "SPEAKING") { p.rot = 0.5; p.pulse = 0.09; p.speed = 1.6; p.audioGain = 0.4; }
-  else if (s === "LEARNING" || s === "OBSERVING" || s === "QUESTIONING" ||
-           s === "INVESTIGATING" || s === "EXPERIMENTING" || s === "VERIFYING" ||
-           s === "DEVELOPING") { p.rot = 0.7; p.pulse = 0.07; p.speed = 1.9; p.swirl = 0.6; }
-  else if (s === "ERROR") { p.rot = 0.1; p.pulse = 0.02; p.speed = 0.4; p.alpha = 0.55; p.err = true; }
-  else if (s === "DEGRADED" || s === "RECOVERING") { p.rot = 0.2; p.pulse = 0.04; p.speed = 0.8; p.alpha = 0.7; }
-  else if (s === "OFFLINE") { p.rot = 0.06; p.pulse = 0.02; p.speed = 0.3; p.alpha = 0.5; }
-  // REAL mic health gates the LISTENING claim: without an active mic the orb
-  // shows a calmer pattern — the runtime still decides; the UI only renders.
-  if (micStatus === "MIC_UNAVAILABLE" && s === "LISTENING") {
-    p.rot = 0.15; p.pulse = 0.02; p.alpha = 0.6; p.audioGain = 0.0;
-  }
-  return p;
-}
+            // Clear Input
+            input.value = "";
+            chat.scrollTop = chat.scrollHeight;
 
-/* ---------- 3D orb data ---------- */
-const TAU = Math.PI * 2;
-function buildPoints(n, radius, spread) {
-  const pos = new Float32Array(n * 3);
-  const phase = new Float32Array(n);
-  const rnd = mulberry32(0x5EED + n);
-  for (let i = 0; i < n; i++) {
-    // uniform-ish distribution on the sphere (fibonacci lattice + jitter)
-    const y = 1 - (i / (n - 1)) * 2;
-    const r = Math.sqrt(Math.max(0, 1 - y * y));
-    const th = i * 2.399963;
-    const jx = (rnd() - 0.5) * spread;
-    const jy = (rnd() - 0.5) * spread;
-    const jz = (rnd() - 0.5) * spread;
-    pos[i * 3] = r * Math.cos(th) * radius + jx;
-    pos[i * 3 + 1] = y * radius + jy;
-    pos[i * 3 + 2] = r * Math.sin(th) * radius + jz;
-    phase[i] = rnd();
-  }
-  return { pos, phase, n };
-}
-function mulberry32(a) {
-  return function () {
-    a |= 0; a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+            // Show thinking indicator
+            const thinking = document.createElement('div');
+            thinking.className = 'thinking';
+            thinking.textContent = 'Zerion is thinking...';
+            chat.appendChild(thinking);
+            chat.scrollTop = chat.scrollHeight;
 
-/* ---------- WebGL renderer ---------- */
-let gl = null;
-let glProg = null;
-let glCore = null;
-let glInner = null;
-const FALLBACK = { active: false, ctx: null, core: null, inner: null };
-
-const VERT = `
-attribute vec3 aPos;
-attribute float aPhase;
-uniform mat4 uProj;
-uniform float uTime;
-uniform float uRot;
-uniform float uTilt;
-uniform float uState;
-uniform float uAudio;
-uniform float uPulse;
-uniform float uPointScale;
-uniform float uAlphaMul;
-varying float vAlpha;
-varying float vPhase;
-void main() {
-  vec3 p = aPos;
-  float ph = aPhase * 6.2831;
-  float t = uTime;
-  // breathing (idle always alive; never static)
-  float breath = 1.0 + uPulse * sin(t * 2.0 + ph);
-  if (uState > 0.5 && uState < 1.5) {          // LISTENING / audio-reactive
-    breath *= 1.0 + uAudio * 0.22;
-  } else if (uState > 1.5 && uState < 2.5) {   // THINKING / TRANSCRIBING: inward swirl
-    float a = t * 1.5 + ph;
-    float c = cos(a); float s = sin(a);
-    p.xz = vec2(c * p.x - s * p.z, s * p.x + c * p.z);
-    p *= 1.0 - 0.10 * (0.5 + 0.5 * sin(t * 3.0 + ph * 2.0));
-  } else if (uState > 2.5 && uState < 3.5) {   // EXECUTING: outward energy
-    breath *= 1.0 + 0.14 * (0.5 + 0.5 * sin(t * 5.0 + ph * 3.3));
-  } else if (uState > 3.5 && uState < 4.5) {   // SPEAKING
-    breath *= 1.0 + (0.10 + 0.28 * uAudio) * (0.5 + 0.5 * sin(t * 9.0 + ph * 1.3));
-  }
-  p *= breath;
-  // slow rotation
-  float rot = uRot * t;
-  float cr = cos(rot); float sr = sin(rot);
-  p.xz = vec2(cr * p.x - sr * p.z, sr * p.x + cr * p.z);
-  // tilt
-  float ct = cos(uTilt); float st = sin(uTilt);
-  p.yz = vec2(ct * p.y - st * p.z, st * p.y + ct * p.z);
-  gl_Position = uProj * vec4(p, 1.0);
-  float depth = 1.0 / (1.0 - gl_Position.z * 0.55);
-  gl_PointSize = uPointScale * depth * (0.75 + 0.5 * aPhase);
-  vAlpha = uAlphaMul * (0.5 + 0.5 * aPhase);
-  vPhase = aPhase;
-}
-`;
-const FRAG = `
-precision mediump float;
-varying float vAlpha;
-varying float vPhase;
-uniform vec3 uColor;
-uniform float uTime;
-uniform float uGlow;
-void main() {
-  float d = length(gl_PointCoord - 0.5);
-  float a = smoothstep(0.5, 0.06, d) * vAlpha;
-  vec3 col = uColor * (0.65 + 0.45 * sin(uTime * 3.0 + vPhase * 40.0));
-  gl_FragColor = vec4(col * uGlow, a);
-}
-`;
-
-function compileShader(type, src) {
-  const sh = gl.createShader(type);
-  gl.shaderSource(sh, src);
-  gl.compileShader(sh);
-  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-    throw new Error("shader: " + gl.getShaderInfoLog(sh));
-  }
-  return sh;
-}
-function buildProgram() {
-  const p = gl.createProgram();
-  gl.attachShader(p, compileShader(gl.VERTEX_SHADER, VERT));
-  gl.attachShader(p, compileShader(gl.FRAGMENT_SHADER, FRAG));
-  gl.linkProgram(p);
-  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
-    throw new Error("program: " + gl.getProgramInfoLog(p));
-  }
-  gl.useProgram(p);
-  return p;
-}
-function makeMesh(n, radius, spread) {
-  const d = buildPoints(n, radius, spread);
-  const buf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-  gl.bufferData(gl.ARRAY_BUFFER, d.pos, gl.STATIC_DRAW);
-  const phBuf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, phBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, d.phase, gl.STATIC_DRAW);
-  return { n, posBuf: buf, phBuf };
-}
-function projMatrix() {
-  // simple perspective: fov ~50deg, zNear 0.1, zFar 10
-  const f = 1.0 / Math.tan((50 * Math.PI) / 360);
-  const n = 0.1, fz = 10.0, a = gl.canvas.width / Math.max(1, gl.canvas.height);
-  return new Float32Array([
-    f / a, 0, 0, 0,
-    0, f, 0, 0,
-    0, 0, (fz + n) / (n - fz), -1,
-    0, 0, (2 * fz * n) / (n - fz), 0,
-  ]);
-}
-
-function initGL() {
-  const canvas = document.createElement("canvas");
-  $("orb-stage").appendChild(canvas);
-  const attrs = { antialias: true, alpha: false, powerPreference: "high-performance" };
-  gl = canvas.getContext("webgl", attrs) || canvas.getContext("experimental-webgl", attrs);
-  if (!gl) { initFallback(canvas); return; }
-  glProg = buildProgram();
-  glCore = makeMesh(PARTICLE_BUDGET, 1.0, 0.035);
-  glInner = makeMesh(INNER_BUDGET, 0.42, 0.02);
-  gl.enable(gl.BLEND);
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-  gl.clearColor(0, 0, 0, 1);
-  resize();
-  window.addEventListener("resize", resize);
-}
-function resize() {
-  if (!gl) return;
-  const c = gl.canvas;
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const w = Math.max(1, Math.floor(c.clientWidth * dpr));
-  const h = Math.max(1, Math.floor(c.clientHeight * dpr));
-  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
-  gl.viewport(0, 0, w, h);
-}
-function drawCloud(mesh, params, u, stateCode) {
-  gl.useProgram(glProg);
-  gl.bindBuffer(gl.ARRAY_BUFFER, mesh.posBuf);
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-  gl.bindBuffer(gl.ARRAY_BUFFER, mesh.phBuf);
-  gl.enableVertexAttribArray(1);
-  gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 0, 0);
-  gl.uniformMatrix4fv(gl.getUniformLocation(glProg, "uProj"), false, u.proj);
-  gl.uniform1f(gl.getUniformLocation(glProg, "uTime"), u.time);
-  gl.uniform1f(gl.getUniformLocation(glProg, "uRot"), params.rot * params.speed);
-  gl.uniform1f(gl.getUniformLocation(glProg, "uTilt"), 0.35);
-  gl.uniform1f(gl.getUniformLocation(glProg, "uState"), stateCode);
-  gl.uniform1f(gl.getUniformLocation(glProg, "uAudio"), u.audio);
-  gl.uniform1f(gl.getUniformLocation(glProg, "uPulse"), params.pulse);
-  gl.uniform1f(gl.getUniformLocation(glProg, "uPointScale"), u.pointScale);
-  gl.uniform1f(gl.getUniformLocation(glProg, "uAlphaMul"), params.alpha);
-  gl.uniform3f(gl.getUniformLocation(glProg, "uColor"), params.color[0], params.color[1], params.color[2]);
-  gl.uniform1f(gl.getUniformLocation(glProg, "uGlow"), u.glow);
-  gl.drawArrays(gl.POINTS, 0, mesh.n);
-}
-function renderGL(now, params, stateCode, audio) {
-  const t = now / 1000;
-  const u = {
-    proj: projMatrix(), time: t, audio: Math.min(1, audio),
-    pointScale: (TIER === "low" ? 5.5 : 7.0) * (gl.canvas.height / 900),
-    glow: params.err ? 0.5 : 1.0,
-  };
-  gl.clear(gl.COLOR_BUFFER_BIT);
-  // outer core
-  drawCloud(glCore, params, u, stateCode);
-  // inner energy core (brighter, faster)
-  const innerParams = {
-    rot: params.rot * 2.2, pulse: params.pulse * 1.5, speed: params.speed,
-    alpha: Math.min(1, params.alpha + 0.15), color: [0.45, 0.75, 1.0],
-  };
-  u.glow = 1.25;
-  u.pointScale = u.pointScale * 0.8;
-  drawCloud(glInner, innerParams, u, stateCode);
-}
-
-/* ---------- 2D fallback renderer (WebGL unavailable) ---------- */
-function initFallback(canvas) {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  FALLBACK.active = true;
-  FALLBACK.ctx = ctx;
-  FALLBACK.core = buildPoints(Math.min(PARTICLE_BUDGET, 700), 1.0, 0.03);
-  FALLBACK.inner = buildPoints(Math.min(INNER_BUDGET, 160), 0.42, 0.02);
-  $("webgl-fallback-note").style.display = "block";
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const resize2d = () => {
-    canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
-    canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
-  };
-  resize2d();
-  window.addEventListener("resize", resize2d);
-}
-function render2D(now, params, stateCode, audio) {
-  const ctx = FALLBACK.ctx;
-  const w = ctx.canvas.width, h = ctx.canvas.height;
-  ctx.clearRect(0, 0, w, h);
-  const cx = w / 2, cy = h / 2;
-  const radius = Math.min(w, h) * 0.34;
-  const fov = 2.2;
-  const rot = params.rot * params.speed * (now / 1000);
-  const tilt = 0.35;
-  const breath = 1 + params.pulse * Math.sin((now / 1000) * 2);
-  const drawSet = (set, size, bright) => {
-    for (let i = 0; i < set.n; i++) {
-      let x = set.pos[i * 3], y = set.pos[i * 3 + 1], z = set.pos[i * 3 + 2];
-      const ph = set.phase[i] * TAU;
-      let br = breath;
-      if (stateCode > 0.5 && stateCode < 1.5) br *= 1 + audio * 0.22;
-      else if (stateCode > 1.5 && stateCode < 2.5) {
-        const a = (now / 1000) * 1.5 + ph;
-        const nx = x * Math.cos(a) - z * Math.sin(a);
-        z = x * Math.sin(a) + z * Math.cos(a); x = nx;
-        br *= 1 - 0.10 * (0.5 + 0.5 * Math.sin((now / 1000) * 3 + ph * 2));
-      } else if (stateCode > 2.5 && stateCode < 3.5) {
-        br *= 1 + 0.14 * (0.5 + 0.5 * Math.sin((now / 1000) * 5 + ph * 3.3));
-      } else if (stateCode > 3.5 && stateCode < 4.5) {
-        br *= 1 + (0.10 + 0.28 * audio) * (0.5 + 0.5 * Math.sin((now / 1000) * 9 + ph * 1.3));
-      }
-      x *= br; y *= br; z *= br;
-      const cr = Math.cos(rot), sr = Math.sin(rot);
-      const rx = cr * x - sr * z, rz = sr * x + cr * z;
-      const ct = Math.cos(tilt), st = Math.sin(tilt);
-      const ry = ct * y - st * rz, rz2 = st * y + ct * rz;
-      const scale = fov / (fov - rz2 / radius);
-      const px = cx + rx * radius * scale;
-      const py = cy + ry * radius * scale;
-      const alpha = (params.alpha * (0.35 + 0.65 * set.phase[i])) * Math.min(1, scale);
-      ctx.fillStyle = "rgba(30,144,255," + alpha.toFixed(3) + ")";
-      const s = size * scale * (0.7 + 0.5 * set.phase[i]);
-      ctx.fillRect(px - s / 2, py - s / 2, s, s);
-    }
-  };
-  drawSet(FALLBACK.core, TIER === "low" ? 2.6 : 3.2, 1.0);
-  drawSet(FALLBACK.inner, 2.2, 1.3);
-}
-
-/* ---------- state code for shader branches ---------- */
-function stateCode(state) {
-  const s = String(state || "IDLE").toUpperCase();
-  if (s === "LISTENING") return 1.0;
-  if (s === "TRANSCRIBING" || s === "THINKING") return 2.0;
-  if (s === "EXECUTING") return 3.0;
-  if (s === "SPEAKING") return 4.0;
-  return 0.0; // idle / boot / error / degraded / offline (base behavior)
-}
-
-/* ---------- render loop (paused when hidden) ---------- */
-let lastFrame = 0;
-function frame(now) {
-  if (document.hidden) { lastFrame = 0; return; }
-  requestAnimationFrame(frame);
-  const snap = uiState.presentation || {};
-  // Full perception telemetry (incl. canonical mic_status) lives under
-  // voice.perception; presentation.voice_perception is the gated summary.
-  const vpFull = (uiState.voice && uiState.voice.perception) || {};
-  const micStatus = vpFull.mic_status ||
-                    (snap.voice_perception || {}).mic_status || "UNKNOWN";
-  const state = snap.runtime_state || "IDLE";
-  const p = orbParams(state, micStatus);
-  const audio = Math.max(
-    Math.min(1, audioRms),
-    state === "SPEAKING" ? Math.min(1, serverRms || 0) : 0
-  );
-  if (gl) renderGL(now, p, stateCode(state), audio);
-  else if (FALLBACK.active) render2D(now, p, stateCode(state), audio);
-}
-
-/* ---------- HUD (real state only) ---------- */
-function renderHud() {
-  const snap = uiState.presentation || {};
-  const sys = uiState.system || {};
-  const voice = uiState.voice || {};
-  const models = uiState.models || {};
-  const vp = (voice.perception && Object.keys(voice.perception).length
-              ? voice.perception : snap.voice_perception) || {};
-
-  stateLine.textContent = snap.state_label || snap.runtime_state || "UNKNOWN";
-
-  // MICROPHONE — the displayed claim must match the real pipeline.
-  const micStatus = vp.mic_status || "UNKNOWN";
-  micLine.textContent = micStatus;
-  micLine.className = micStatus === "LISTENING" ? "ok" :
-    (micStatus === "MIC_UNAVAILABLE" || micStatus === "MIC_ERROR") ? "bad" : "";
-  if (!micAvailable && !micError && micStatus === "MIC_UNAVAILABLE") {
-    // real reason from the runtime when the browser has no permission either
-    const reason = vp.reason || (vp.mic || {}).reason;
-    micLine.title = reason || "";
-  }
-
-  const stt = (voice.stt || {});
-  sttLine.textContent = stt.status || "—";
-  if (stt.reason) sttLine.title = stt.reason;
-
-  const tts = (voice.tts || {});
-  ttsLine.textContent = tts.status || "—";
-  if (tts.reason) ttsLine.title = tts.reason;
-
-  const ms = models.status || "UNKNOWN";
-  const selected = (models.selected || []).join(", ");
-  modelLine.textContent = ms + (models.available > 0 && selected ? " · " + selected : "");
-  modelLine.title = (models.dir || "") + " (" + (models.discovered || 0) + " discovered)";
-
-  const rs = (sys.runtime_status || "UNKNOWN");
-  runtimeLine.textContent = rs + (sys.offline_mode ? " · " + sys.offline_mode : "");
-  modeLine.textContent = "MODE: " + (sys.offline_mode === "OFFLINE_ONLY" ? "LOCAL" : (sys.offline_mode || "—"));
-
-  // Mic button reflects real listening state.
-  const btn = $("btnMic");
-  const btnListen = $("btnListen");
-  const isListening = vp.is_listening === true || micStatus === "LISTENING";
-  btn.textContent = micAvailable ? "🎙 ACTIVE" : "🎙 START";
-  btn.classList.toggle("active", !!micAvailable);
-  btnListen.textContent = isListening ? "LISTENING: ON" : "LISTENING: OFF";
-  btnListen.classList.toggle("active", isListening);
-  if (micError) { micLine.textContent = "MIC_ERROR"; micLine.title = micError; }
-}
-
-function pushTranscript(kind, text) {
-  const el = document.createElement("div");
-  el.className = "t " + kind;
-  el.textContent = text;
-  transcriptBox.prepend(el);
-  while (transcriptBox.children.length > 8) transcriptBox.removeChild(transcriptBox.lastChild);
-}
-
-/* ---------- server feed ---------- */
-async function fetchState() {
-  try {
-    const r = await fetch("/api/ui-state", { cache: "no-store" });
-    if (r.ok) { uiState = await r.json(); renderHud(); }
-  } catch (e) { /* server unreachable: keep last known state */ }
-}
-function attachStream() {
-  if (!window.EventSource) return;
-  const es = new EventSource("/api/stream");
-  es.onmessage = (ev) => {
-    try {
-      const rec = JSON.parse(ev.data);
-      const et = rec.event_type || "";
-      const payload = rec.payload || {};
-      if (et === "VOICE_TRANSCRIPT_FINAL" && payload.transcript) {
-        pushTranscript("user", "YOU: " + payload.transcript);
-      } else if (et === "VOICE_RESPONSE_READY" && payload.response) {
-        pushTranscript("zerion", "ZERION: " + payload.response);
-      } else if (et === "WAKE_WORD_DETECTED") {
-        pushTranscript("user", "WAKE: " + (payload.matched_phrase || ""));
-      } else if (et === "WAKE_WORD_MISDETECTED") {
-        pushTranscript("err", "no wake phrase — say “Zerion”");
-      } else if (et === "VOICE_STT_UNAVAILABLE") {
-        pushTranscript("err", "STT unavailable: " + (payload.reason || ""));
-      } else if (et === "VOICE_MIC_UNAVAILABLE") {
-        pushTranscript("err", "mic unavailable: " + (payload.reason || ""));
-      } else if (et === "VOICE_BARGE_IN") {
-        pushTranscript("user", "INTERRUPTED");
-      }
-    } catch (e) { /* ignore malformed frame */ }
-  };
-}
-
-/* ---------- REAL microphone capture (browser) ---------- */
-let audioCtx = null;
-let analyser = null;
-let micStream = null;
-
-async function initMicrophone() {
-  if (micStream) return true;
-  try {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 512;
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const source = audioCtx.createMediaStreamSource(micStream);
-    source.connect(analyser);
-    micAvailable = true;
-    micError = null;
-    const data = new Uint8Array(analyser.frequencyBinCount);
-    let lastPost = 0;
-    (function track() {
-      analyser.getByteTimeDomainData(data);
-      let sum = 0;
-      for (let i = 0; i < data.length; i++) {
-        const v = (data[i] - 128) / 128;
-        sum += v * v;
-      }
-      audioRms = Math.sqrt(sum / data.length);
-      // Real audio energy streamed to the server so the runtime's own VAD /
-      // barge-in sees the same audio the browser hears (throttled ~10 Hz).
-      const now = performance.now();
-      if (now - lastPost > 100) {
-        lastPost = now;
-        fetch("/api/voice/audio-rms", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rms: Math.round(audioRms * 1000) / 1000 }),
-        }).catch(() => {});
-      }
-      requestAnimationFrame(track);
-    })();
-    return true;
-  } catch (e) {
-    micAvailable = false;
-    micError = (e && e.name) ? e.name + ": " + (e.message || "permission denied") : String(e);
-    micLine.textContent = "MIC_ERROR";
-    micLine.className = "bad";
-    micLine.title = micError;
-    pushTranscript("err", "microphone unavailable: " + micError);
-    return false;
-  }
-}
-
-/* ---------- local STT via Web Speech API (offline where available) ---------- */
-function startRecognition() {
-  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRec || recognition) return;
-  recognitionStopped = false;
-  recognition = new SpeechRec();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.lang = "en-US";
-
-  recognition.onresult = async (event) => {
-    const last = event.results[event.results.length - 1];
-    const text = last[0].transcript;
-    if (last.isFinal) {
-      pushTranscript("user", "YOU: " + text);
-      try {
-        const res = await fetch("/api/voice/process", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ transcript: text }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.cognitive_response) {
-            pushTranscript("zerion", "ZERION: " + data.cognitive_response);
-            if (data.tts_status === "AUDIO_GENERATED") {
-              speakLocal(data.cognitive_response);
-            }
-          }
+            // Send to ZERION backend
+            fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: text })
+            })
+            .then(r => r.json())
+            .then(data => {
+                thinking.remove();
+                const aiMsg = document.createElement('div');
+                aiMsg.className = 'message ai';
+                aiMsg.textContent = data.reply || data.output || data.response || "I'm not sure how to respond to that.";
+                chat.appendChild(aiMsg);
+                chat.scrollTop = chat.scrollHeight;
+            })
+            .catch(err => {
+                thinking.remove();
+                const aiMsg = document.createElement('div');
+                aiMsg.className = 'message ai';
+                aiMsg.textContent = "Connection error. Make sure ZERION backend is running.";
+                chat.appendChild(aiMsg);
+                chat.scrollTop = chat.scrollHeight;
+            })
+            .finally(() => {
+                isProcessing = false;
+                sendBtn.disabled = false;
+                input.focus();
+            });
         }
-      } catch (e) { /* server offline */ }
-    } else {
-      const partial = text;
-      if (partial) {
-        fetch("/api/voice/partial", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ transcript: partial }),
-        }).catch(() => {});
-      }
-    }
-  };
+    </script>
 
-  recognition.onerror = (e) => {
-    // Permission/network errors must surface — never silently pretend.
-    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-      recognitionStopped = true;
-      micLine.textContent = "MIC_ERROR";
-      micLine.className = "bad";
-      micLine.title = "speech recognition blocked: " + e.error;
-      pushTranscript("err", "speech recognition blocked (" + e.error + ")");
-      try { recognition.stop(); } catch (err) {}
-    } else if (e.error === "network") {
-      recognitionStopped = true;
-      pushTranscript("err", "speech recognition network error — local STT required");
-    }
-  };
-  recognition.onend = () => {
-    // Restart ONLY if we did not intentionally stop and no fatal error.
-    if (!recognitionStopped && !document.hidden) {
-      try { recognition.start(); } catch (err) {}
-    }
-  };
-  try { recognition.start(); } catch (e) {}
-}
-function stopRecognition() {
-  recognitionStopped = true;
-  if (recognition) {
-    try { recognition.onend = null; recognition.stop(); } catch (e) {}
-    recognition = null;
-  }
-}
-
-/* ---------- local TTS via speechSynthesis (real browser output) ---------- */
-function speakLocal(text) {
-  if (!("speechSynthesis" in window)) return;
-  const u = new SpeechSynthesisUtterance(text);
-  u.onstart = () => { serverRms = 0.55; };
-  u.onend = () => { serverRms = 0; };
-  u.onerror = () => { serverRms = 0; };
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(u);
-}
-
-/* ---------- controls ---------- */
-async function postCommand(command, payload) {
-  try {
-    const r = await fetch("/api/command", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ command, payload: payload || {} }),
-    });
-    return await r.json();
-  } catch (e) { return { status: "ERROR", error: String(e) }; }
-}
-
-$("btnMic").addEventListener("click", async () => {
-  const ok = await initMicrophone();
-  if (ok) {
-    await postCommand("START_LISTENING", {});
-    startRecognition();
-  }
-  await fetchState();
-});
-
-$("btnListen").addEventListener("click", async () => {
-  const snap = (uiState.presentation || {});
-  const vp = snap.voice_perception || {};
-  const isListening = vp.is_listening === true;
-  if (isListening) {
-    await postCommand("STOP_LISTENING", {});
-    stopRecognition();
-  } else {
-    const ok = await initMicrophone();
-    if (ok) { await postCommand("START_LISTENING", {}); startRecognition(); }
-  }
-  await fetchState();
-});
-
-$("btnSend").addEventListener("click", sendCommandText);
-$("cmdInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") sendCommandText();
-});
-async function sendCommandText() {
-  const input = $("cmdInput");
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = "";
-  pushTranscript("user", "YOU: " + text);
-  try {
-    const r = await fetch("/api/voice/process", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ transcript: text }),
-    });
-    if (r.ok) {
-      const data = await r.json();
-      if (data.cognitive_response) {
-        pushTranscript("zerion", "ZERION: " + data.cognitive_response);
-      }
-    }
-  } catch (e) { pushTranscript("err", "server unreachable"); }
-}
-
-/* ---------- boot ---------- */
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) { lastFrame = 0; }
-});
-initGL();
-attachStream();
-fetchState();
-setInterval(fetchState, 2000);
-requestAnimationFrame(frame);
-</script>
 </body>
 </html>

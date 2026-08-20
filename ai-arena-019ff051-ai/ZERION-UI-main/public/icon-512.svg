@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="64" fill="#04080f"/>
-  <circle cx="256" cy="240" r="120" fill="none" stroke="#00e5ff" stroke-width="3" opacity="0.6"/>
-  <circle cx="256" cy="240" r="90" fill="none" stroke="#f5a623" stroke-width="2" opacity="0.4"/>
-  <circle cx="256" cy="240" r="28" fill="#f5a623" opacity="0.9"/>
-  <circle cx="256" cy="240" r="10" fill="#ffffff" opacity="0.8"/>
-  <text x="256" y="420" text-anchor="middle" fill="#00e5ff" font-family="monospace" font-size="32" letter-spacing="6" opacity="0.7">ZERION</text>
-</svg>
