@@ -420,19 +420,13 @@ class CognitiveRuntime:
             local_models=self.local_models,
             emit=self._emit_routing_event,
         )
-        self.cognitive_router.register_provider(
-            LegacyOpenAIAdapter(),
-            configured=bool(os.environ.get("OPENAI_API_KEY", "")),
-            integration_implemented=True)
+        # OpenAI: REMOVED — Gemini is the sole authoritative provider.
+        # GGUF: REMOVED — local model is not used.
         self.cognitive_router.register_provider(
             LegacyGeminiAdapter(),
             configured=bool(os.environ.get("GEMINI_API_KEY", "")),
-            integration_implemented=False)  # no real Gemini integration
-        self.cognitive_router.register_provider(
-            LegacyGGUFAdapter(models_dir=str(self.local_models.models_dir),
-                              discovery=self.local_models),
-            configured=True,   # discovery exists and is real
-            integration_implemented=True)
+            integration_implemented=True)  # real Gemini API integration
+        # LegacyGGUFAdapter intentionally NOT registered — local model removed.
 
         # ZERION runtime identity & tool layer. The local model is only the
         # reasoning engine; these own the identity/context, the executable

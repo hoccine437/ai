@@ -27,5 +27,8 @@ def load_dotenv():
 
 if __name__ == "__main__":
     load_dotenv()
+    # Microphone INPUT is permanently disabled.
+    # Voice OUTPUT (TTS) is allowed; microphone capture is NOT.
+    os.environ["ZERION_DISABLE_MIC"] = "1"
     from zerion.cli import main
     main()

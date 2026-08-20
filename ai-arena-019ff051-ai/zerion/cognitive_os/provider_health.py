@@ -38,6 +38,7 @@ class ProviderHealth:
     last_successful_request: Optional[float] = None
     last_error: str = ""
     resource_usage: Dict[str, Any] = field(default_factory=dict)
+    unavailable_since: Optional[float] = None  # auto-recover after cooldown
 
     def error_rate(self) -> Optional[float]:
         if self.total_calls == 0:
@@ -98,6 +99,13 @@ class ProviderHealthTracker:
             return ProviderStatus.UNKNOWN
         err = h.error_rate() or 0.0
         if h.consecutive_failures >= UNAVAILABLE_AFTER_FAILURES or err >= ERROR_RATE_UNAVAILABLE:
+            # Auto-recovery: after 60s cooldown, try again as UNKNOWN
+            if h.unavailable_since and (time.time() - h.unavailable_since) > 60:
+                h.consecutive_failures = max(0, UNAVAILABLE_AFTER_FAILURES - 1)
+                h.unavailable_since = None
+                return ProviderStatus.UNKNOWN
+            if h.unavailable_since is None:
+                h.unavailable_since = time.time()
             return ProviderStatus.UNAVAILABLE
         if h.consecutive_failures >= DEGRADE_AFTER_FAILURES or err >= ERROR_RATE_DEGRADE:
             return ProviderStatus.DEGRADED

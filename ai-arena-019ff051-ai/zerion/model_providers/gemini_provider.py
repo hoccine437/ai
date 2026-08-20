@@ -27,7 +27,7 @@ from zerion.runtime.evidence import ExecutionMode
 _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Default model — fast, cheap, good quality
-_DEFAULT_MODEL = "gemini-3.1-flash"
+_DEFAULT_MODEL = "gemini-2.5-flash"
 
 
 class GeminiProvider(ModelProvider):

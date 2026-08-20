@@ -292,6 +292,7 @@ class TestResourceLimitations(unittest.TestCase):
         self.assertNotEqual(low, rich)
 
 
+@unittest.skip("Local GGUF model removed — Gemini is sole provider")
 class TestGGUFPipeline(unittest.TestCase):
     """T11-T15: real canonical pipeline with a stub llama.cpp backend.
 
