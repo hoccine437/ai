@@ -398,19 +398,39 @@ class AscendantEngine:
             except (asyncio.CancelledError, Exception):
                 pass
             self._pulse_driver_task = None
-        await self.event_bus.publish(Event(
-            event_type=EventType.SYSTEM_SHUTDOWN,
-            payload={"timestamp": time.time()},
-            priority=95
-        ))
+        try:
+            await self.event_bus.publish(Event(
+                event_type=EventType.SYSTEM_SHUTDOWN,
+                payload={"timestamp": time.time()},
+                priority=95
+            ))
+        except (KeyboardInterrupt, Exception):
+            pass  # Graceful shutdown — skip event on signal/cleanup
         # Slice 1: persist cognitive state and publish RUNTIME_STOPPED before the bus closes
-        await self.cognitive_runtime.stop()
-        # Slice 10.1: stop the perception organ before the bus closes.
-        await self.voice_perception.stop()
-        await self.event_bus.stop()
-        await self.watchdog.stop()
-        await self.scheduler.stop()
-        self.identity.save()
+        try:
+            await self.cognitive_runtime.stop()
+        except Exception:
+            pass
+        try:
+            await self.voice_perception.stop()
+        except Exception:
+            pass
+        try:
+            await self.event_bus.stop()
+        except Exception:
+            pass
+        try:
+            await self.watchdog.stop()
+        except Exception:
+            pass
+        try:
+            await self.scheduler.stop()
+        except Exception:
+            pass
+        try:
+            self.identity.save()
+        except Exception:
+            pass
 
     async def _drive_pulse_loop(self) -> None:
         """Persistent cadence driving the canonical CognitivePulse (Slice 8).

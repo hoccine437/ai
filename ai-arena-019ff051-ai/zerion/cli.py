@@ -144,7 +144,8 @@ async def _enter_interactive_chat(engine: AscendantEngine,
     openai_key = os.environ.get("OPENAI_API_KEY", "")
     if gemini_key:
         active_mode = "GEMINI (cloud)"
-        model_line = "gemini-2.0-flash"
+        _gmodel = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash")
+        model_line = _gmodel
         inference_line = "REAL API"
     elif openai_key:
         active_mode = "OPENAI (cloud)"
