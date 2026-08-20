@@ -459,6 +459,14 @@ class CognitiveRuntime:
             self.agent_registry = None
             self.master_tools = None
 
+        # Intelligence pipeline: SituationModel → Uncertainty → Strategy →
+        # Prediction → SelfModel. This replaces keyword-based _cognitive_pre_reason.
+        try:
+            from zerion.intelligence import CognitiveEngine
+            self.cognitive_engine = CognitiveEngine()
+        except Exception:
+            self.cognitive_engine = None
+
         # Slice 7: self-improvement gate. Real telemetry -> evidence-required
         # bottleneck detection -> improvement proposals -> static analysis /
         # risk policy / tests / baseline-vs-candidate benchmark -> promotion or
@@ -1670,7 +1678,46 @@ class CognitiveRuntime:
 
     async def _cognitive_pre_reason(self, task, prompt, goal_id=None):
         """Cognitive pre-reasoning: Zerion analyzes the task BEFORE
-        generating a response. Returns enriched cognitive context."""
+        generating a response. Returns enriched cognitive context.
+
+        Uses the Intelligence Pipeline when available, with keyword fallback."""
+        # --- NEW: Intelligence Pipeline ---
+        if self.cognitive_engine is not None:
+            try:
+                memory_hints = []
+                try:
+                    for ep in self.episode_store.list()[-20:]:
+                        ctx = str(getattr(ep, 'context', '') or '')
+                        if any(w in ctx.lower() for w in prompt.lower().split() if len(w) > 3):
+                            memory_hints.append(ctx[:100])
+                except Exception:
+                    pass
+                past_failures = []
+                try:
+                    for f in self.failure_store.list_failures()[-10:]:
+                        action = str(getattr(f, 'action', '') or '')
+                        error = str(getattr(f, 'error', '') or '')
+                        if action or error:
+                            past_failures.append(f'{action}: {error}')
+                except Exception:
+                    pass
+                tool_names = []
+                try:
+                    tool_names = [n for n, _ in self.tool_router.describe_pairs()]
+                except Exception:
+                    pass
+                ctx = await self.cognitive_engine.pre_reason(
+                    user_input=prompt,
+                    memory_context='; '.join(memory_hints[:5]) if memory_hints else '',
+                    available_tools=tool_names,
+                    past_failures=past_failures,
+                )
+                if goal_id:
+                    ctx = f'ACTIVE GOAL: {goal_id}\n{ctx}'
+                return ctx
+            except Exception:
+                pass
+        # --- LEGACY FALLBACK ---
         parts = []
         prompt_lower = prompt.lower().strip()
 
@@ -1772,7 +1819,26 @@ class CognitiveRuntime:
     # -- cognitive reflection -----------------------------------------------
 
     async def _cognitive_reflect(self, task, prompt, result, goal_id=None):
-        """Post-action reflection: Zerion reflects on what happened."""
+        """Post-action reflection: Zerion reflects on what happened.
+        Uses the Intelligence Pipeline when available."""
+        # --- NEW: Intelligence Pipeline post_act ---
+        if self.cognitive_engine is not None:
+            try:
+                output = getattr(result, "output", None) or ""
+                success = bool(output) and getattr(result, "status", None) == ResultStatus.SUCCESS
+                tool_used = str(result.metadata.get("tool", "")
+                               or result.metadata.get("tool_used", ""))
+                latency = getattr(result, "latency_ms", 0) or 0
+                await self.cognitive_engine.post_act(
+                    user_input=prompt,
+                    response=output[:500],
+                    tool_used=tool_used,
+                    success=success,
+                    latency_ms=latency,
+                )
+            except Exception:
+                pass
+        # --- Legacy reflection ---
         try:
             output = getattr(result, "output", None) or ""
             success = bool(output) and getattr(result, "status", None) == ResultStatus.SUCCESS
