@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools==82.0.1", "wheel==0.48.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zerion-genesis"
+version = "5.0.0"
+description = "ZERION-X Ω — Self-Developing Intelligence Runtime & Intelligence Foundry Substrate"
+readme = "README.md"
+authors = [{ name = "Zerion Autonomous Engineering Collective", email = "dev@zerion.ai" }]
+license = { text = "Apache-2.0" }
+requires-python = ">=3.9"
+# Core runtime is pure Python 3.9+ standard library: 100% local cognition
+# needs zero third-party packages. httpx is OPTIONAL — it is used only by the
+# legacy OpenAI adapter, which OFFLINE_ONLY routing structurally excludes. The
+# `openai` SDK is intentionally absent: the runtime never imports it, and its
+# jiter dependency has no Termux/Android aarch64 wheel. Pins are synchronized
+# with requirements.txt and setup.py; every pin supports Python 3.9.
+dependencies = []
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Android",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows"
+]
+
+[project.optional-dependencies]
+online = [
+    "httpx==0.28.1",
+]
+local_llm = [
+    "llama-cpp-python==0.3.34",
+]
+audio = [
+    "sounddevice==0.5.5",
+    "numpy==2.0.2",
+]
+dev = [
+    "pytest==8.3.5",
+    "pytest-asyncio==1.2.0",
+    "ruff==0.16.3",
+    "mypy==1.19.1",
+]
+all = [
+    "httpx==0.28.1",
+    "llama-cpp-python==0.3.34",
+    "sounddevice==0.5.5",
+    "numpy==2.0.2",
+    "pytest==8.3.5",
+    "pytest-asyncio==1.2.0",
+    "ruff==0.16.3",
+    "mypy==1.19.1",
+]
+
+[project.scripts]
+zerion = "zerion.cli:main"
+genesis = "zerion.cli:main"
+zerion-ui = "zerion.ui.server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["zerion", "zerion.*"]
+
+[tool.setuptools.package-data]
+zerion = ["ui/*.html", "ui/*.css", "ui/*.js"]
