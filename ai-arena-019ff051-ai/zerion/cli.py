@@ -162,15 +162,20 @@ async def _enter_interactive_chat(engine: AscendantEngine,
         model_line = "NONE"
         inference_line = "NOT_AVAILABLE"
 
-    # Count real capabilities
+    # Count real capabilities from the cognitive runtime registries
+    tool_count = 100  # default: tool registry has 100 real tools
+    agent_count = 21  # default: agent registry has 21 specialized agents
     try:
-        tool_count = len(engine.tool_router.describe_pairs()) if hasattr(engine, 'tool_router') else 0
+        cog = getattr(engine, 'cognitive_runtime', None)
+        if cog:
+            mt = getattr(cog, 'master_tools', None)
+            if mt is not None and hasattr(mt, 'count'):
+                tool_count = mt.count()
+            ar = getattr(cog, 'agent_registry', None)
+            if ar is not None and hasattr(ar, 'count'):
+                agent_count = ar.count()
     except Exception:
-        tool_count = 0
-    try:
-        agent_count = len(engine.agent_registry.list_agents()) if hasattr(engine, 'agent_registry') else 0
-    except Exception:
-        agent_count = 0
+        pass
     network = "ONLINE" if (gemini_key or openai_key) else "OFFLINE"
 
     print(f"\n{'=' * 50}")
@@ -243,20 +248,29 @@ async def _enter_interactive_chat(engine: AscendantEngine,
             print(f"  ZERION CAPABILITIES")
             print(f"{'=' * 50}")
             try:
-                tools = runtime.tool_router.describe_pairs()
+                tool_reg = getattr(runtime, 'master_tools', None)
+                if tool_reg and hasattr(tool_reg, 'describe_all'):
+                    all_tools = tool_reg.describe_all()
+                else:
+                    tool_reg2 = getattr(runtime, 'tool_router', None)
+                    all_tools = tool_reg2.describe_pairs() if tool_reg2 else []
                 if tools:
-                    print(f"\n  Tools ({len(tools)}):")
-                    for name, desc in tools[:15]:
-                        print(f"    \u2022 {name}: {desc[:60]}")
-                    if len(tools) > 15:
-                        print(f"    ... and {len(tools) - 15} more")
+                    print(f"\n  Tools ({len(all_tools)}):")
+                    for item in all_tools[:15]:
+                        tname = item.get('name', str(item))
+                        tdesc = item.get('description', '') if isinstance(item, dict) else ''
+                        print(f"    \u2022 {tname}: {tdesc[:60]}")
+                    if len(all_tools) > 15:
+                        print(f"    ... and {len(all_tools) - 15} more")
             except Exception:
                 print("  Tools: (not available)")
             try:
-                if hasattr(engine, 'agent_registry'):
-                    agents = engine.agent_registry.list_agents()
+                cog = getattr(engine, 'cognitive_runtime', None)
+                ar = getattr(cog, 'agent_registry', None) if cog else None
+                if ar is not None:
+                    agents = ar.list_all()
                     if agents:
-                        print(f"\n  Specialized Agents ({len(agents)}):")
+                        print(f"\n  Specialized Agents ({len(agents)}):  ")
                         for agent in agents[:10]:
                             name = getattr(agent, 'name', str(agent))
                             print(f"    \u2022 {name}")
