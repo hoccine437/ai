@@ -20,6 +20,8 @@ html, body {
   height: 100dvh;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+  /* Prevent iOS rubber-banding */
+  overscroll-behavior: none;
 }
 
 body {
@@ -27,6 +29,12 @@ body {
   color: #f0ede8;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
+  /* Prevent pull-to-refresh */
+  overscroll-behavior-y: contain;
+}
+
+/* Prevent Android Chrome pull-to-refresh on the whole page */
+html {
   overscroll-behavior: none;
 }
 
@@ -72,7 +80,47 @@ body {
   }
 }
 
-/* Prevent pull-to-refresh */
-body {
-  overscroll-behavior-y: contain;
+/* Prevent text selection on UI elements (but allow in chat) */
+main > section,
+main > div[aria-hidden] {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Chat messages should be selectable */
+div[style*="max-width: 85%"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Ensure minimum touch targets (48px recommended by Material Design) */
+button, [role="button"] {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Fix for Android WebView where 100vh includes the URL bar */
+@supports not (height: 100dvh) {
+  html, body {
+    height: 100%;
+  }
+}
+
+/* Prevent double-tap zoom on Android */
+* {
+  touch-action: manipulation;
+}
+
+/* Better scrollbar styling for chat on Android */
+::-webkit-scrollbar {
+  width: 3px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 229, 255, 0.2);
+  border-radius: 3px;
 }

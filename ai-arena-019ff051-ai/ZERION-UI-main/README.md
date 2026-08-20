@@ -1,47 +1,61 @@
-# ZERION-UI
+# ZERION-UI — Phone Interface
 
-**ZERION-X ASCENDANT** — autonomous cognitive orb + reasoning-graph interface for Android/Termux.
+A phone-optimized Next.js 15 + React 19 web UI for ZERION-X ASCENDANT.
 
-The animated orb at the center represents ZERION's core intelligence. Tap it to cycle states (idle → thinking → speaking). The reasoning web shows ZERION's **21 specialized AI agents** orbiting the core. Click any agent node to see its capabilities.
+Based on [APEX-UI](https://github.com/RubenM1990/APEX-UI) (MIT), rebranded and adapted for ZERION.
 
-Built with Next.js 15 + React 19. Runtime deps: `lucide-react`, `three`, `@react-three/fiber`, `@react-three/postprocessing`.
+## Features
 
-## Quick Start
+- **Orb visualization** — animated 3D core with 21 orbiting agent nodes
+- **Chat input** — talk to ZERION naturally from your phone
+- **21 AI agents** — visual constellation of ZERION's specialized agents
+- **100 tools** — system status overview
+- **PWA** — install on your Android home screen
+- **Offline-ready** — connects to local ZERION Python backend
+
+## Setup on Android (Termux)
 
 ```bash
+# 1. Install Node.js in Termux
+pkg install nodejs
+
+# 2. Navigate to the UI directory
+cd ~/ai-arena-019ff051-ai/ZERION-UI-main
+
+# 3. Install dependencies
 npm install
+
+# 4. Start the dev server (binds to 0.0.0.0 for phone access)
 npm run dev
-# open http://localhost:3000
+
+# 5. Open in your phone browser
+# http://localhost:3000
 ```
 
-## What's Inside
+## Start the ZERION Backend
 
-| Piece | What it does |
-|-------|--------------|
-| `ApexOrb` | Golden ring frame, waveform and orbit dots (pure SVG) |
-| `ApexCore3D` | Cyan particle core (`react-three-fiber` + bloom) |
-| `ApexHeroOrb` | SVG ring + particle core, scaled to fit |
-| `ReasoningWeb` | Agent constellation — 21 ZERION agents with circuit traces |
-| `OrbStatusBar` | Equalizer + STANDBY cluster at the bottom |
-| `ShaderBackground` | Animated WebGL plasma waves backdrop |
-| `ApexWorld` | Composes everything; tap-state cycle + agent overview cards |
-| `ApexOverviewPanel` | Top-left HUD: clock + system info |
-| `/api/chat` | Bridge to ZERION Python cognitive runtime |
-| `/api/weather` | Keyless open-meteo weather proxy |
+The UI connects to ZERION's Python cognitive runtime on port 8080:
 
-## ZERION's 21 Agents
+```bash
+cd ~/ai-arena-019ff051-ai
+python main.py
+```
 
-Strategic · Deep Reason · Research · Coding · Debugging · Security · System · Automation · Data Analysis · Math · Planning · Creative · Communication · Vision · Voice/Audio · Web/Info · Financial · Simulation · Verification · Learning · Recovery
+## Install as PWA
 
-## Phone UI
+1. Open `http://localhost:3000` in Chrome
+2. Tap the menu (⋮) → "Add to Home screen"
+3. ZERION will appear as a standalone app
 
-Designed for Android/Termux:
-- Mobile-first viewport (no pinch zoom)
-- Safe area insets for notched phones
-- Touch-optimized tap targets
-- Chat input at the bottom
-- `100dvh` for proper mobile height
+## Tech Stack
 
-## License
+- Next.js 15 + React 19
+- Three.js + React Three Fiber (3D orb)
+- WebGL shader background
+- Pure SVG reasoning web (21 agents)
+- CSS animations + keyframes
 
-MIT
+## Credits
+
+- Orb design: [APEX-UI](https://github.com/RubenM1990/APEX-UI) by RubenM1990 (MIT)
+- Shader background: adapted from 21st.dev community component
