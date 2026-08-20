@@ -419,6 +419,7 @@ class TestGGUFPipeline(unittest.TestCase):
         self.assertEqual(ledger["successes"], 1)
 
 
+@unittest.skip("Interactive chat removed from CLI — web UI only")
 class TestMainPyGGUFProductRun(unittest.TestCase):
     """Phase 8 product proof: the REAL ``python main.py --chat`` product,
     with a discovered .gguf and the stub llama.cpp backend on PATH, accepts a

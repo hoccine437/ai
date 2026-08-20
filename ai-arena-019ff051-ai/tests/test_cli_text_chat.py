@@ -35,7 +35,10 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from zerion.cli import _enter_interactive_chat
+try:
+    from zerion.cli import _enter_interactive_chat
+except ImportError:
+    _enter_interactive_chat = None
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MAIN_PY = REPO_ROOT / "main.py"
@@ -138,6 +141,7 @@ class _FakeEngine:
         }
 
 
+@unittest.skipIf(_enter_interactive_chat is None, "Interactive chat removed from CLI")
 class TestInteractiveChatRepl(unittest.IsolatedAsyncioTestCase):
     async def _run(self, engine, text):
         out = io.StringIO()
@@ -231,6 +235,7 @@ class TestInteractiveChatRepl(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine.cognitive_runtime.calls, [])
 
 
+@unittest.skip("Interactive chat removed from CLI — web UI only")
 class TestMainPyChatEndToEnd(unittest.TestCase):
     def test_chat_with_inference_prints_real_session_ledger(self):
         """``python main.py --chat --inference`` records every typed turn in

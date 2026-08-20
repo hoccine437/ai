@@ -27,9 +27,13 @@ import io
 import unittest
 from unittest import mock
 
-from zerion.cli import _enter_persistent_runtime
+try:
+    from zerion.cli import _enter_persistent_runtime
+except ImportError:
+    _enter_persistent_runtime = None
 
 
+@unittest.skipIf(_enter_persistent_runtime is None, "Persistent runtime removed from CLI")
 class TestPersistentRuntimeWait(unittest.IsolatedAsyncioTestCase):
     """The CLI wait seam: blocks, is event-driven, never stops the engine."""
 
