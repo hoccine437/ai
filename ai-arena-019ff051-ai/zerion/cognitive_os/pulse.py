@@ -130,9 +130,8 @@ DEFAULT_PULSE_CONFIG: Dict[str, Any] = {
         "network_requests_per_hour": 100,
         "concurrent_tasks": 2,
     },
-    # Local-first canonical default: normal cognition never requires or
-    # depends on cloud providers (no OpenAI/Gemini keys needed).
-    "offline_mode": "OFFLINE_ONLY",
+    # Gemini-first: AUTO mode uses cloud providers when available.
+    "offline_mode": "AUTO",
 
     "max_queue_size": 500,
 }

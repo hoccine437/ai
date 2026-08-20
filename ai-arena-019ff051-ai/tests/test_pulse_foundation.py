@@ -495,10 +495,9 @@ class TestOfflineFirst(unittest.IsolatedAsyncioTestCase):
         rt = _rt(self.tmp)
         await rt.start()
         pulse = rt.cognitive_pulse
-        # Local-first canonical default (OFFLINE_ONLY): normal cognition must
-        # never require cloud providers.
-        self.assertEqual(pulse._offline_mode, OfflineMode.OFFLINE_ONLY)
-        pulse._offline_mode = OfflineMode.AUTO
+        # Gemini-first: default is AUTO (uses cloud when available)
+        self.assertEqual(pulse._offline_mode, OfflineMode.AUTO)
+        pulse._offline_mode = OfflineMode.OFFLINE_ONLY
         self.assertTrue(pulse.health()["running"])
         await rt.stop()
 

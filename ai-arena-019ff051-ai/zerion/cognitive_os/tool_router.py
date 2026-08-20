@@ -446,6 +446,12 @@ class ZerionToolRouter:
             return ToolResult(ok=False, tool="memory_store", output="",
                               error="episode store unavailable — cannot "
                                     "persist memory")
+        # Resolve pronouns: "remember it" -> look at recent conversation
+        pronouns = {"it", "this", "that", "them", "those"}
+        if fact.lower().strip() in pronouns:
+            resolved = self._resolve_pronoun(fact.lower().strip())
+            if resolved:
+                fact = resolved
         from zerion.cognitive_os.episode import (
             EpisodeMode,
             EpisodeStatus,
@@ -467,6 +473,28 @@ class ZerionToolRouter:
         return ToolResult(
             ok=True, tool="memory_store",
             output=f"Learned: {fact}")
+
+    def _resolve_pronoun(self, pronoun: str):
+        """Resolve a pronoun to the most recent relevant fact from conversation."""
+        episode_store = getattr(self.runtime, "episode_store", None)
+        if episode_store is None:
+            return None
+        recent = episode_store.list()[-10:]
+        for ep in reversed(recent):
+            ctx = str(getattr(ep, "context", "") or "")
+            if ctx.startswith("knowledge: "):
+                fact = ctx[len("knowledge: "):]
+                if len(fact) > 3:
+                    return fact
+            if "user message:" in ctx.lower():
+                user_msg = ctx.split("user message:", 1)[-1].strip()
+                import re
+                for pattern in [r"my\s+\w+\s+is\s+(.+)", r"\w+\s+is\s+(.+)",
+                                r"i\s+(?:like|prefer|love|hate|want|need)\s+(.+)"]:
+                    m = re.search(pattern, user_msg.lower())
+                    if m:
+                        return m.group(0).strip()
+        return None
 
     def _tool_memory_recall(self, arg: str, _router) -> ToolResult:
         query = (arg or "").strip().rstrip("?!.,;:")

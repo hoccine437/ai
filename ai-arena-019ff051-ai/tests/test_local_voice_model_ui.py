@@ -401,8 +401,9 @@ class TestOfflineNoKeyCognition(unittest.TestCase):
         from zerion.cognitive_os.state import StateStore
         tmp = _tmp()
         rt = CognitiveRuntime(data_dir=tmp)
+        # Gemini-first: default is AUTO (uses cloud when available)
         self.assertEqual(rt.cognitive_pulse._offline_mode,
-                         OfflineMode.OFFLINE_ONLY)
+                         OfflineMode.AUTO)
 
     def test_offline_router_never_calls_cloud(self):
         from zerion.cognitive_os.cognitive_router import CognitiveRouter
