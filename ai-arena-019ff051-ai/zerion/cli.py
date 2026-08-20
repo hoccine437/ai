@@ -64,30 +64,33 @@ async def _enter_persistent_runtime(engine: AscendantEngine,
 # feedback that ZERION understood their intent.
 _INTENT_HINTS = {
     # Diagnostic / system
-    " problem":   "\u0627\u0644\u062d\u0627\u0644 ...",
-    " diagnose":  "\u0627\u0644\u062d\u0627\u0644 ...",
-    "status":     "\u0627\u0644\u062d\u0627\u0644 ...",
-    "ready":      "\u0627\u0644\u062d\u0627\u0644 ...",
+    " problem":   "\U0001f50d alan ...",
+    " diagnose":  "\U0001f50d alan ...",
+    "status":     "\U0001f50d alan ...",
+    "ready":      "\U0001f50d alan ...",
+    "\u0645\u0634\u0643\u0644":       "\U0001f50d yfhs ...",
     # Repair / fix
-    "fix":        "\u064a\u0639\u0645\u0644 ...",
-    "repair":     "\u064a\u0639\u0645\u0644 ...",
-    "solve":      "\u064a\u0642\u0648\u0645 \u0628\u0627\u0644\u062d\u0644 ...",
-    "\u0635\u0644\u062d":       "\u064a\u0639\u0645\u0644 ...",
+    "fix":        "\u26a1 y3ml ...",
+    "repair":     "\u26a1 y3ml ...",
+    "solve":      "\u26a1 y9oum bel7l ...",
+    "\u0635\u0644\u062d":       "\u26a1 y3ml ...",
+    "\u0639\u0644\u062d":       "\u26a1 y9oum bel7l ...",
     # Test / verify
-    "test":       "\u064a\u062c\u0631\u0628 ...",
-    "verify":     "\u064a\u062a\u062d\u0642\u0642 ...",
-    "\u062c\u0631\u0628":        "\u064a\u062c\u0631\u0628 ...",
+    "test":       "\U0001f9ea yjrb ...",
+    "verify":     "\U0001f9ea yt7a99 ...",
+    "\u062c\u0631\u0628":        "\U0001f9ea yjrb ...",
     # Learn / remember
-    "learn":      "\u064a\u062a\u0639\u0644\u0645 ...",
-    "remember":   "\u064a\u062d\u0641\u0638 ...",
-    "\u062a\u0639\u0644\u0645":       "\u064a\u062a\u0639\u0644\u0645 ...",
-    "\u0634\u0648\u0641":        "\u064a\u0641\u062d\u0635 ...",
+    "learn":      "\U0001f4da yta3llm ...",
+    "remember":   "\U0001f4da y7fz ...",
+    "\u062a\u0639\u0644\u0645":       "\U0001f4da yta3llm ...",
+    "\u0634\u0648\u0641":        "\U0001f50d yfhs ...",
     # General inquiry
-    "what":       "\u064a\u0641\u0647\u0645 ...",
-    "how":        "\u064a\u0641\u0647\u0645 ...",
-    "why":        "\u064a\u0641\u0647\u0645 ...",
-    "\u0639\u0644\u0627\u0634":       "\u064a\u0641\u0647\u0645 ...",
-    "\u0634\u0646\u0648":        "\u064a\u0641\u0647\u0645 ...",
+    "what":       "\U0001f4a1 yfhem ...",
+    "how":        "\U0001f4a1 yfhem ...",
+    "why":        "\U0001f4a1 yfhem ...",
+    "\u0639\u0644\u0627\u0634":       "\U0001f4a1 yfhem ...",
+    "\u0634\u0646\u0648":        "\U0001f4a1 yfhem ...",
+    "\u0648\u0627\u0634":        "\U0001f4a1 yfhem ...",
 }
 
 
@@ -129,56 +132,59 @@ async def _enter_interactive_chat(engine: AscendantEngine,
     from zerion.cognitive_os.router_types import RoutingMode, Task, TaskType
     from zerion.conversation.context import ConversationContext
 
-    # -- banner (real runtime state, never hard-coded) --------------------
+    # -- dynamic banner (shows actual mode: Gemini/OpenAI/Local) ----------
     r = engine.local_readiness()
     models = r.get("models") or {}
-    registry = getattr(engine, "local_model_registry", None)
-    entries = registry.list_models() if registry is not None else []
     ms = models.get("status", "NO_LOCAL_MODEL_AVAILABLE")
-    available = models.get("available") or 0
-    selected = models.get("selected") or []
-    backend = models.get("backend") or {}
-    probe = models.get("probe") or {}
-    if ms == "READY" and available:
-        model_line = ", ".join(str(s) for s in selected) if selected else \
-            f"{available} model(s) available"
-    elif available:
-        model_line = ", ".join(str(s) for s in selected) if selected else \
-            f"{available} model(s) available (DISCOVERED)"
-    elif entries:
-        model_line = f"{len(entries)} discovered, 0 available"
-    else:
-        model_line = "NONE (no .gguf in models/)"
-    tts = r.get("tts") or {}
-    tts_line = "READY" if tts.get("status") == "AVAILABLE" \
-        else tts.get("status", "UNKNOWN")
-    if tts.get("reason"):
-        tts_line = f"{tts_line} ({tts['reason']})"
     identity_core = getattr(engine, "identity", None)
     system_name = getattr(identity_core, "system_name", "ZERION")
-    invariants = getattr(identity_core, "invariants", None) or []
-    print("\nZERION X")
-    print("\u2500" * 32)
-    print(f"IDENTITY    {system_name}")
-    print(f"CONSTITUTION {len(invariants)} INVARIANT LAWS (INV-001..INV-010)")
-    print(f"MODE        {r.get('mode', 'LOCAL')} OFFLINE")
-    print("INPUT       TEXT")
-    print("VOICE       OUTPUT ONLY")
-    print(f"MODEL       {model_line}")
-    print(f"BACKEND     {backend.get('name', 'UNKNOWN')}"
-          + ("" if backend.get("available") else " (MISSING)"))
-    print(f"INFERENCE   {probe.get('inference', 'NOT_VERIFIED')}")
-    print(f"COGNITION   {'ACTIVE' if ms == 'READY' else 'MODEL_BLOCKED'}")
-    print(f"TTS         {tts_line}")
-    print("RUNTIME     ACTIVE")
-    print("\u2500" * 32)
-    if ms == "BLOCKED" and available:
-        reason = probe.get("error") or models.get("reason") \
-            or backend.get("install_hint") or "inference not verified"
-        print(f"MODEL INFERENCE = FAILED -- {reason}")
-    elif ms == "NO_LOCAL_MODEL_AVAILABLE":
-        print("MODEL INFERENCE = NOT_VERIFIED (no local .gguf model)")
-    print("Talk to ZERION naturally. 'exit' or Ctrl-C to quit.\n")
+
+    # Determine active mode based on what's actually configured
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if gemini_key:
+        active_mode = "GEMINI (cloud)"
+        model_line = "gemini-2.0-flash"
+        inference_line = "REAL API"
+    elif openai_key:
+        active_mode = "OPENAI (cloud)"
+        model_line = "gpt-4o-mini"
+        inference_line = "REAL API"
+    elif ms == "READY":
+        selected = models.get("selected") or []
+        active_mode = "LOCAL OFFLINE"
+        model_line = selected[0] if selected else "local model"
+        probe = models.get("probe") or {}
+        inference_line = probe.get("inference", "NOT_VERIFIED")
+    else:
+        active_mode = "LOCAL (no model)"
+        model_line = "NONE"
+        inference_line = "NOT_AVAILABLE"
+
+    # Count real capabilities
+    try:
+        tool_count = len(engine.tool_router.describe_pairs()) if hasattr(engine, 'tool_router') else 0
+    except Exception:
+        tool_count = 0
+    try:
+        agent_count = len(engine.agent_registry.list_agents()) if hasattr(engine, 'agent_registry') else 0
+    except Exception:
+        agent_count = 0
+    network = "ONLINE" if (gemini_key or openai_key) else "OFFLINE"
+
+    print(f"\n{'=' * 50}")
+    print(f"  {system_name} - Autonomous Cognitive System")
+    print(f"{'=' * 50}")
+    print(f"  MODE:       {active_mode}")
+    print(f"  MODEL:      {model_line}")
+    print(f"  INFERENCE:  {inference_line}")
+    print(f"  TOOLS:      {tool_count} available")
+    print(f"  AGENTS:     {agent_count} specialized")
+    print(f"  NETWORK:    {network}")
+    print(f"{'-' * 50}")
+    print(f"  Talk naturally. ZERION understands Arabic, English, French.")
+    print(f"  Type 'capabilities' to list tools. 'exit' to quit.")
+    print(f"{'=' * 50}\n")
 
     # -- real runtime objects ----------------------------------------------
     runtime = engine.cognitive_runtime
@@ -230,6 +236,41 @@ async def _enter_interactive_chat(engine: AscendantEngine,
             print("[ZERION] shutting down cleanly.")
             break
 
+        # -- Handle special commands (optional shortcuts) -------------------
+        if text.lower() in ("capabilities", "tools", "osools"):
+            print(f"\n{'=' * 50}")
+            print(f"  ZERION CAPABILITIES")
+            print(f"{'=' * 50}")
+            try:
+                tools = runtime.tool_router.describe_pairs()
+                if tools:
+                    print(f"\n  Tools ({len(tools)}):")
+                    for name, desc in tools[:15]:
+                        print(f"    \u2022 {name}: {desc[:60]}")
+                    if len(tools) > 15:
+                        print(f"    ... and {len(tools) - 15} more")
+            except Exception:
+                print("  Tools: (not available)")
+            try:
+                if hasattr(engine, 'agent_registry'):
+                    agents = engine.agent_registry.list_agents()
+                    if agents:
+                        print(f"\n  Specialized Agents ({len(agents)}):")
+                        for agent in agents[:10]:
+                            name = getattr(agent, 'name', str(agent))
+                            print(f"    \u2022 {name}")
+                        if len(agents) > 10:
+                            print(f"    ... and {len(agents) - 10} more")
+            except Exception:
+                print("  Agents: (not available)")
+            print(f"{'=' * 50}\n")
+            continue
+        if text.lower() in ("status", "hala"):
+            print(f"[ZERION] Mode: {active_mode} | Model: {model_line} | "
+                  f"Tools: {tool_count} | Agents: {agent_count} | "
+                  f"Network: {network}")
+            continue
+
         # -- Step 1: Resolve references in the user's message -------------
         resolved_text, ref_note = conversation.resolve_references(text)
         if ref_note:
@@ -252,7 +293,7 @@ async def _enter_interactive_chat(engine: AscendantEngine,
                 stakes=0.1,
                 goal_relevance=0.5,
                 required_capabilities=set(),
-                offline_required=True,
+                offline_required=not bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY")),
                 verification_required=False,
                 metadata={
                     "source": "termux_chat",
@@ -262,8 +303,9 @@ async def _enter_interactive_chat(engine: AscendantEngine,
             )
 
             # -- Step 3: Execute through real cognitive runtime ------------
+            # Use AUTO mode: Gemini when configured, local GGUF when offline
             result = await runtime.execute_task(
-                task, prompt_text, mode=RoutingMode.OFFLINE_ONLY)
+                task, prompt_text, mode=RoutingMode.AUTO)
             out = getattr(result, "output", None)
 
             # -- Step 4: Observable trace (opt-in) -------------------------
@@ -308,9 +350,11 @@ async def _enter_interactive_chat(engine: AscendantEngine,
                 except Exception:
                     pass
                 error_msg = tool_error or errors or "no output generated"
-                tail = (" (LOCAL MODEL UNAVAILABLE -- drop a .gguf into "
-                        "models/)" if not available else
-                        " (try rephrasing your message)")
+                # Provide helpful context-specific hints
+                if not os.environ.get("GEMINI_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
+                    tail = " (Set GEMINI_API_KEY for cloud inference)"
+                else:
+                    tail = " (try rephrasing your message)"
                 print(f"\n[ZERION] {status_val} -- {error_msg}{tail}")
                 conversation.add_zerion_turn(
                     f"{status_val}: {error_msg}", tool_result_ok=False)

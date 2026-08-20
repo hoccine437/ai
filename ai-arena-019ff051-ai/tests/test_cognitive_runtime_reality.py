@@ -466,7 +466,8 @@ class TestMainPyGGUFProductRun(unittest.TestCase):
             out, ok = read_until("YOU > ", 90)
             self.assertTrue(ok, msg=f"no prompt:\n{out}")
             # Honest banner: the discovered model is named, not faked.
-            self.assertIn("MODEL       qwen2-0.5b", out)
+            self.assertIn("MODEL:", out)
+            self.assertIn("qwen2-0.5b", out)
             proc.stdin.write("What is 25 x 4?\n")
             proc.stdin.flush()
             out, ok = read_until("YOU > ", 60)

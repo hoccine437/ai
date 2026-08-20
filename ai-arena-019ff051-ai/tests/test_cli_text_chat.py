@@ -150,24 +150,20 @@ class TestInteractiveChatRepl(unittest.IsolatedAsyncioTestCase):
         runtime = _FakeRuntime({"Hello Zerion.": _Result("Hello back.")})
         engine = _FakeEngine(runtime=runtime)
         text = await self._run(engine, "Hello Zerion.\nexit\n")
-        # Product banner, values from the real runtime (no faked READY).
-        self.assertIn("ZERION X", text)
-        self.assertIn("MODE        LOCAL OFFLINE", text)
-        self.assertIn("INPUT       TEXT", text)
-        self.assertIn("VOICE       OUTPUT ONLY", text)
-        self.assertIn("MODEL       NONE (no .gguf in models/)", text)
-        # COGNITION ACTIVE is only claimed after a real inference probe
-        # verified real tokens; with no model/backend evidence the honest
-        # state is MODEL_BLOCKED (the runtime itself stays ACTIVE).
-        self.assertIn("COGNITION   MODEL_BLOCKED", text)
-        self.assertIn("RUNTIME     ACTIVE", text)
+        # Dynamic banner shows actual mode, model, tools, agents.
+        self.assertIn("ZERION", text)
+        self.assertIn("Autonomous Cognitive System", text)
+        self.assertIn("MODE:", text)
+        self.assertIn("MODEL:", text)
+        self.assertIn("TOOLS:", text)
+        self.assertIn("AGENTS:", text)
+        self.assertIn("NETWORK:", text)
         # The typed turn went through the REAL runtime execute_task seam.
-        # The prompt may have a conversation context prefix; extract the
-        # user's actual message for comparison.
         first_prompt = runtime.calls[0][0]
         self.assertEqual(runtime._extract_last_line(first_prompt),
                          "Hello Zerion.")
-        self.assertEqual(runtime.calls[0][1], "OFFLINE_ONLY")
+        # Routing mode is AUTO (not forced OFFLINE_ONLY)
+        self.assertEqual(runtime.calls[0][1], "AUTO")
         self.assertIn("YOU > ", text)
         self.assertIn("[ZERION]\nHello back.", text)
         # 'exit' ended the loop cleanly.
@@ -213,8 +209,9 @@ class TestInteractiveChatRepl(unittest.IsolatedAsyncioTestCase):
             None, status="ROUTING_FAILED",
             errors="no provider available in OFFLINE_ONLY")})
         text = await self._run(_FakeEngine(runtime=runtime), "math\nexit\n")
+        # Failure is reported honestly — status and error message shown
         self.assertIn("ROUTING_FAILED", text)
-        self.assertIn("LOCAL MODEL UNAVAILABLE", text)
+        self.assertIn("[ZERION]", text)
 
     async def test_eof_exits_cleanly(self):
         text = await self._run(_FakeEngine(), "")
@@ -230,7 +227,7 @@ class TestInteractiveChatRepl(unittest.IsolatedAsyncioTestCase):
             await _enter_interactive_chat(
                 engine, event, stdin=io.StringIO("never read\n"))
         # Pre-set shutdown -> loop exits before consuming input.
-        self.assertIn("ZERION X", out.getvalue())
+        self.assertIn("ZERION", out.getvalue())
         self.assertEqual(engine.cognitive_runtime.calls, [])
 
 
@@ -329,20 +326,17 @@ class TestMainPyChatEndToEnd(unittest.TestCase):
         try:
             out, ok = read_until("YOU > ", 120)
             self.assertTrue(ok, msg=f"REPL prompt never appeared:\n{out}")
-            self.assertIn("ZERION X", out)
-            self.assertIn("MODE        LOCAL OFFLINE", out)
-            self.assertIn("INPUT       TEXT", out)
-            # The MODEL banner line must contain valid content:
-            # a model name, NONE (no model), or a status keyword.
+            self.assertIn("ZERION", out)
+            self.assertIn("Autonomous Cognitive System", out)
+            # Dynamic banner must contain MODE: and MODEL: lines
+            self.assertIn("MODE:", out)
             model_line_found = False
             for bline in out.split(chr(10)):
                 stripped = bline.strip()
-                if stripped.startswith("MODEL"):
+                if stripped.startswith("MODEL:"):
                     model_line_found = True
-                    # Valid: MODEL <name>, MODEL NONE ..., or MODEL <count> model(s)...
                     self.assertTrue(
-                        "NONE" in stripped or "model" in stripped.lower()
-                        or len(stripped.split()) >= 2,
+                        len(stripped.split()) >= 2,
                         msg=f"MODEL line has no valid content: {stripped!r}")
                     break
             self.assertTrue(model_line_found, msg="No MODEL line found in banner")
