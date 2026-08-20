@@ -357,8 +357,7 @@ class ZerionToolRouter:
         return ToolResult(
             ok=True, tool="greeting",
             output=f"{time_greeting}! I am ZERION, your autonomous cognitive "
-                   f"assistant. I run entirely on your local device with no "
-                   f"cloud connection.{status_hint} How can I help you today?")
+                   f"assistant powered by Gemini.{status_hint} How can I help you today?")
 
     def _tool_identity(self, _arg: str, _router) -> ToolResult:
         try:

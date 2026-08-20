@@ -501,6 +501,7 @@ class TestSlice10OfflineE2E(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
+    @unittest.skip("Local model removed — Gemini is sole provider")
     async def test_offline_end_to_end_reports_blocked_layer_honestly(self):
         engine = AscendantEngine(data_dir=self.temp_dir,
                                  models_dir=self.models_dir)

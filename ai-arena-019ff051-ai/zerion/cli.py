@@ -2,7 +2,7 @@
 ZERION-X — Web UI Launcher
 
 Launches the ZERION web interface on port 8080 (or custom port).
-No terminal chat. No voice mode. No offline mode. Gemini 3.1 Flash only.
+Gemini-first cognitive runtime.
 """
 from __future__ import annotations
 import argparse
@@ -58,7 +58,7 @@ async def run_cli():
         server = GenesisWebServer(engine=engine, host="0.0.0.0", port=args.port)
         await server.start()
         print(f"[ZERION] Web interface: http://0.0.0.0:{args.port}")
-        print(f"[ZERION] Model: gemini-3.1-flash")
+        print(f"[ZERION] Model: gemini-2.5-flash")
         print(f"[ZERION] Tools: 100 | Agents: 21")
 
         # Keep running

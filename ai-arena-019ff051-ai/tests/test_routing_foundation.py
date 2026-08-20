@@ -1188,9 +1188,11 @@ class TestRuntimeWiring(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             engine = AscendantEngine(data_dir=tmp)
             self.assertIsNotNone(engine.cognitive_runtime.cognitive_router)
-            self.assertEqual(
-                sorted(engine.cognitive_runtime.cognitive_router.providers()),
-                ["gemini", "local_gguf", "openai"])
+            providers = engine.cognitive_runtime.cognitive_router.providers()
+            # Gemini is the sole authoritative provider
+            self.assertIn("gemini", providers)
+            self.assertNotIn("openai", providers)
+            self.assertNotIn("local_gguf", providers)
 
     async def test_runtime_verification_uses_slice3_evidence_store(self):
         with tempfile.TemporaryDirectory() as tmp:

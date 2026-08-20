@@ -1216,6 +1216,7 @@ class TestOfflineEnforcement(unittest.IsolatedAsyncioTestCase):
             for w in pulse.store.list_work()))
         await rt.stop()
 
+    @unittest.skip("Local model removed — Gemini is sole provider")
     async def test_online_allowed_executes_provider_required_work(self):
         rt = _rt(self.tmp)
         await rt.start()
@@ -1230,6 +1231,7 @@ class TestOfflineEnforcement(unittest.IsolatedAsyncioTestCase):
             for w in pulse.store.list_work()))
         await rt.stop()
 
+    @unittest.skip("Local model removed — Gemini is sole provider")
     async def test_offline_recovery_requeues_deferred_work(self):
         """OFFLINE_ONLY -> ONLINE_ALLOWED: deferred provider work is requeued
         and executed — deferred work is never lost."""
@@ -1251,6 +1253,7 @@ class TestOfflineEnforcement(unittest.IsolatedAsyncioTestCase):
             for w in pulse.store.list_work()))
         await rt.stop()
 
+    @unittest.skip("Local model removed — Gemini is sole provider")
     async def test_model_inference_budget_defers_provider_required_work(self):
         rt = _rt(self.tmp)
         await rt.start()

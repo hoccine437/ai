@@ -99,9 +99,11 @@ class ProviderHealthTracker:
             return ProviderStatus.UNKNOWN
         err = h.error_rate() or 0.0
         if h.consecutive_failures >= UNAVAILABLE_AFTER_FAILURES or err >= ERROR_RATE_UNAVAILABLE:
-            # Auto-recovery: after 60s cooldown, try again as UNKNOWN
+            # Auto-recovery: after 60s cooldown, reset completely and try again
             if h.unavailable_since and (time.time() - h.unavailable_since) > 60:
-                h.consecutive_failures = max(0, UNAVAILABLE_AFTER_FAILURES - 1)
+                h.consecutive_failures = 0
+                h.failures = 0
+                h.total_calls = 0
                 h.unavailable_since = None
                 return ProviderStatus.UNKNOWN
             if h.unavailable_since is None:
