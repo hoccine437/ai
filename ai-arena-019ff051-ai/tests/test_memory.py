@@ -17,7 +17,7 @@ class TestMemory(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, "memory.db")
-        self.store = DevelopmentalMemoryStore(db_path=self.db_path)
+        self.store = DevelopmentalMemoryStore(db_path=self.db_path, data_dir=self.temp_dir)
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)

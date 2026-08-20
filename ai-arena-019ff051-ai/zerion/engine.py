@@ -79,7 +79,7 @@ from zerion.experiments.sandbox import ExecutionSandbox
 
 # --- Memory & Distillation (legacy store kept as a deprecated read-only view;
 # the live flywheel writes episodes through the canonical Slice 4 stores) ---
-from zerion.memory.developmental_store import DevelopmentalMemoryStore
+from zerion.memory.developmental_store import SmartMemory
 
 # --- Capability Birth 3.0 ---
 from zerion.capabilities.detector import CapabilityGapDetector, CapabilityGap
@@ -260,7 +260,7 @@ class AscendantEngine:
         self.experiments = ExperimentEngine(sandbox=self.sandbox, evidence_engine=self.evidence)
 
         # 10. Memory & Distillation
-        self.memory = DevelopmentalMemoryStore(db_path=str(self.data_dir / "memory.db"))
+        self.memory = SmartMemory(data_dir=str(self.data_dir))
 
         # 11. Capabilities & Learning
         self.gap_detector = CapabilityGapDetector()

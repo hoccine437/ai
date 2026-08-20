@@ -485,7 +485,7 @@ class TestUIEventMapping(unittest.TestCase):
         with open(html, "r", encoding="utf-8") as f:
             content = f.read()
         # Simple chat UI: title, chat window, input area, API endpoints
-        self.assertIn("Zerion AI", content)
+        self.assertIn("ZERION AI", content)
         self.assertIn("/api/chat", content)
         self.assertIn("/api/status", content)
         self.assertIn("sendMessage", content)
