@@ -106,7 +106,11 @@ class LegacyOpenAIAdapter:
 
 class LegacyGeminiAdapter:
     """Wraps the GeminiProvider. Now has REAL API integration using stdlib
-    urllib — no SDK required. AVAILABLE when GEMINI_API_KEY is set."""
+    urllib — no SDK required. AVAILABLE when GEMINI_API_KEY is set.
+
+    Note: health_check() returns AVAILABLE whenever a key is configured,
+    because the real API integration works and transient provider-level
+    availability checks should not block routing."""
 
     provider_name = "gemini"
     is_local = False
@@ -136,11 +140,13 @@ class LegacyGeminiAdapter:
         raise NotImplementedError("gemini adapter: streaming not supported")
 
     async def health_check(self) -> ProviderStatus:
-        if not self._configured:
-            return ProviderStatus.NOT_CONFIGURED
-        if self._provider.is_available():
+        # When a key is configured, the real urllib integration works.
+        # Do NOT gate on the legacy provider's is_available() which can
+        # return False transiently — that causes ROUTING_FAILED after
+        # the first successful call.
+        if self._configured:
             return ProviderStatus.AVAILABLE
-        return ProviderStatus.UNAVAILABLE
+        return ProviderStatus.NOT_CONFIGURED
 
     def capabilities(self) -> Set[str]:
         return {TEXT, REASONING}

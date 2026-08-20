@@ -6,7 +6,7 @@ No external SDK required — works on Android/Termux without pip install.
 
 Env vars:
   GEMINI_API_KEY        — Required for Gemini (get from https://aistudio.google.com/apikey)
-  GEMINI_MODEL          — Override model (default: gemini-2.0-flash)
+  GEMINI_MODEL          — Override model (default: gemini-3.1-flash)
   GEMINI_TEMPERATURE    — Override temperature (default: 0.7)
   GEMINI_MAX_TOKENS     — Override max tokens (default: 2048)
 """
@@ -27,7 +27,7 @@ from zerion.runtime.evidence import ExecutionMode
 _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Default model — fast, cheap, good quality
-_DEFAULT_MODEL = "gemini-2.0-flash"
+_DEFAULT_MODEL = "gemini-3.1-flash"
 
 
 class GeminiProvider(ModelProvider):
