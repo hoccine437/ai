@@ -55,16 +55,10 @@ from zerion.cognitive_os.performance_ledger import (
     PerformanceLedger,
     PerformanceLedgerIntegrityError,
 )
-from zerion.cognitive_os.gguf_discovery import (
-    LocalModelDiscovery,
-    ModelLoadManager,
-)
+import unittest.mock
+
 from zerion.cognitive_os.cognitive_router import CognitiveRouter, ModelSelector
-from zerion.cognitive_os.provider_adapters import (
-    LegacyGeminiAdapter,
-    LegacyGGUFAdapter,
-    LegacyOpenAIAdapter,
-)
+from zerion.cognitive_os.provider_adapters import LegacyGeminiAdapter
 from zerion.cognitive_os.cognitive_runtime import CognitiveRuntime
 from zerion.engine import AscendantEngine
 
@@ -139,10 +133,10 @@ def fast_task(**kw):
 
 
 def make_router(tmp, models_dir=None, **kw):
+    # No local models exist anywhere in Zerion: Gemini-only routing.
     return CognitiveRouter(
         health=ProviderHealthTracker(),
         ledger=PerformanceLedger(db_path=f"{tmp}/ledger.db"),
-        local_models=LocalModelDiscovery(models_dir=models_dir or f"{tmp}/models"),
         **kw)
 
 
@@ -167,7 +161,6 @@ class TestProviderInterface(unittest.TestCase):
                     "zerion/cognitive_os/router_types.py",
                     "zerion/cognitive_os/provider_health.py",
                     "zerion/cognitive_os/performance_ledger.py",
-                    "zerion/cognitive_os/gguf_discovery.py",
                     "zerion/cognitive_os/provider_interface.py"):
             src = Path(mod).read_text()
             lines = [ln for ln in src.splitlines()
@@ -191,169 +184,49 @@ class TestProviderInterface(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestProviderAdapters(unittest.TestCase):
-    def test_openai_adapter_not_configured_without_key(self):
-        # Test env must not have a key; status must honestly say NOT_CONFIGURED.
-        adapter = LegacyOpenAIAdapter()
-        models = adapter.list_models()
-        self.assertEqual(adapter.provider_name, "openai")
-        self.assertFalse(adapter.is_local)
-        self.assertEqual(models[0].status, ProviderStatus.NOT_CONFIGURED)
-        self.assertIn("missing OPENAI_API_KEY", models[0].status_reason)
+    """Gemini is the only provider: the OpenAI and GGUF legacy adapters were
+    REMOVED from provider_adapters. These tests pin the Gemini-only surface."""
 
-    def test_openai_generate_returns_structured_failure_when_unconfigured(self):
-        adapter = LegacyOpenAIAdapter()
-        resp = asyncio.run(adapter.generate(ProviderCall(
-            task=fast_task(), prompt="hi", model_id="gpt-4o-mini")))
-        self.assertFalse(resp.success)
-        self.assertIsNone(resp.output)  # never canned text
+    def test_only_gemini_adapter_exists(self):
+        import zerion.cognitive_os.provider_adapters as pa
+        for banned in ("LegacyOpenAIAdapter", "LegacyGGUFAdapter",
+                       "OpenAIProvider", "LocalGGUFProvider"):
+            self.assertFalse(hasattr(pa, banned), f"{banned} must be removed")
+        self.assertTrue(hasattr(pa, "LegacyGeminiAdapter"))
 
     def test_gemini_adapter_is_honest_about_missing_integration(self):
         adapter = LegacyGeminiAdapter()
         models = adapter.list_models()
         self.assertEqual(models[0].status, ProviderStatus.NOT_CONFIGURED)
         resp = asyncio.run(adapter.generate(ProviderCall(
-            task=fast_task(), prompt="hi", model_id="gemini-2.0-flash-exp")))
+            task=fast_task(), prompt="hi", model_id="gemini-2.5-flash")))
         self.assertFalse(resp.success)
-        self.assertIsNone(resp.output)
+        self.assertIsNone(resp.output)  # never canned text
         self.assertEqual(resp.failure_kind, ProviderFailureKind.PROVIDER_UNAVAILABLE)
-
-    def test_gguf_adapter_unavailable_without_models(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            adapter = LegacyGGUFAdapter(models_dir=f"{tmp}/nope")
-            self.assertEqual(adapter.list_models(), [])
-            resp = asyncio.run(adapter.generate(ProviderCall(
-                task=fast_task(), prompt="hi", model_id="whatever")))
-            self.assertFalse(resp.success)
-            self.assertIsNone(resp.output)
-            self.assertEqual(resp.failure_kind, ProviderFailureKind.MODEL_UNAVAILABLE)
-
-    def test_gguf_adapter_discovery_real_but_generation_honest(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            make_models_dir(tmp, "m.gguf")
-            adapter = LegacyGGUFAdapter(models_dir=f"{tmp}/models")
-            models = adapter.list_models()
-            self.assertEqual(len(models), 1)
-            self.assertEqual(models[0].status, ProviderStatus.AVAILABLE)
-            resp = asyncio.run(adapter.generate(ProviderCall(
-                task=fast_task(), prompt="hi", model_id="m")))
-            # Discovery is real; no inference engine is wired in -> structured
-            # MODEL_LOAD_FAILURE, NEVER canned model text.
-            self.assertFalse(resp.success)
-            self.assertIsNone(resp.output)
-            self.assertEqual(resp.failure_kind, ProviderFailureKind.MODEL_LOAD_FAILURE)
 
 
 # ---------------------------------------------------------------------------
 # 3. LOCAL GGUF DISCOVERY (required test)
 # ---------------------------------------------------------------------------
 
-class TestLocalGGUFDiscovery(unittest.TestCase):
-    def test_only_gguf_files_discovered(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            make_models_dir(tmp, "model_a.gguf", "model_b.gguf")
-            mdir = Path(tmp) / "models"
-            (mdir / "not_a_model.txt").write_text("hello")
-            (mdir / "readme.md").write_text("# docs")
-            disc = LocalModelDiscovery(models_dir=str(mdir))
-            self.assertEqual(sorted(disc.models()), ["model_a", "model_b"])
-            self.assertEqual(sorted(m.model_id for m in disc.available()),
-                             ["model_a", "model_b"])
+class NoLocalModelArchitecture(unittest.TestCase):
+    """The local GGUF model architecture has been REMOVED from Zerion.
+    Gemini is the only provider. These tests pin the removal in place."""
 
-    def test_corrupted_gguf_marked_unavailable_not_silently_accepted(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            make_models_dir(tmp, "good.gguf")
-            mdir = Path(tmp) / "models"
-            (mdir / "broken.gguf").write_bytes(b"NOT-A-GGUF-FILE" * 10)
-            disc = LocalModelDiscovery(models_dir=str(mdir))
-            broken = disc.get("broken")
-            self.assertIsNotNone(broken)
-            self.assertEqual(broken.status, ProviderStatus.UNAVAILABLE)
-            self.assertIn("corrupted", broken.status_reason)
-            # Only the good model is loadable/available.
-            self.assertEqual([m.model_id for m in disc.available()], ["good"])
+    def test_local_model_discovery_is_gone(self):
+        import zerion.cognitive_os.cognitive_router as cr
+        self.assertFalse(hasattr(cr, "LocalModelDiscovery"))
+        self.assertFalse(hasattr(cr, "ModelLoadManager"))
+        import zerion.cognitive_os.provider_adapters as pa
+        for banned in ("LocalGGUFProvider", "OpenAIProvider"):
+            self.assertFalse(any(banned in n for n in dir(pa)),
+                             f"{banned} must not exist")
 
-    def test_missing_models_dir_is_empty_not_fake(self):
-        disc = LocalModelDiscovery(models_dir="/nonexistent/zzz/models")
-        self.assertEqual(disc.models(), {})
-        self.assertFalse(disc.any_available())
-
-    def test_duplicate_model_names_marked_unavailable(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            mdir = Path(tmp) / "models"
-            (mdir / "q4").mkdir(parents=True)
-            (mdir / "q8").mkdir()
-            (mdir / "q4" / "dup.gguf").write_bytes(b"GGUF" + b"\x00")
-            (mdir / "q8" / "dup.gguf").write_bytes(b"GGUF" + b"\x00")
-            disc = LocalModelDiscovery(models_dir=str(mdir))
-            # Deterministic: first (sorted) wins; the duplicate is marked
-            # UNAVAILABLE with an explicit duplicate reason, never silently.
-            self.assertEqual(len(disc.models()), 1)
-            info = disc.get("dup")
-            self.assertEqual(info.status, ProviderStatus.AVAILABLE)
-            self.assertEqual(len(disc.available()), 1)
-
-    def test_oversized_model_marked_unavailable(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            make_models_dir(tmp, "big.gguf", size=64)
-            disc = LocalModelDiscovery(models_dir=f"{tmp}/models",
-                                       max_model_bytes=16)
-            big = disc.get("big")
-            self.assertEqual(big.status, ProviderStatus.UNAVAILABLE)
-            self.assertIn("size budget", big.status_reason)
-
-    def test_symlink_escape_outside_models_dir_rejected(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            mdir = Path(tmp) / "models"
-            mdir.mkdir()
-            outside = Path(tmp) / "outside.gguf"
-            outside.write_bytes(b"GGUF" + b"\x00" * 8)
-            try:
-                os.symlink(outside, mdir / "evil.gguf")
-            except (OSError, NotImplementedError):
-                self.skipTest("symlinks not supported here")
-            disc = LocalModelDiscovery(models_dir=str(mdir))
-            evil = disc.get("evil")
-            self.assertIsNotNone(evil)
-            self.assertEqual(evil.status, ProviderStatus.UNAVAILABLE)
-            self.assertIn("outside", evil.status_reason)
-
-    def test_model_info_fields(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            make_models_dir(tmp, "qwen-8k.gguf", size=128)
-            disc = LocalModelDiscovery(models_dir=f"{tmp}/models")
-            info = disc.get("qwen-8k")
-            self.assertEqual(info.format, "gguf")
-            self.assertEqual(info.size_bytes, 132)
-            self.assertIn("text", info.capabilities)
-            self.assertEqual(info.context_window, 8 * 1024)
-
-    def test_load_manager_is_resource_aware(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            make_models_dir(tmp, "a.gguf", "b.gguf", size=100)
-            disc = LocalModelDiscovery(models_dir=f"{tmp}/models")
-            lm = ModelLoadManager(disc, max_loaded_models=1)
-            self.assertIsNotNone(lm.load("a"))
-            self.assertIsNone(lm.load("b"))  # slot budget
-            self.assertTrue(lm.unload("a"))
-            self.assertIsNotNone(lm.load("b"))
-
-    def test_load_manager_byte_budget(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            make_models_dir(tmp, "a.gguf", "b.gguf", size=100)
-            disc = LocalModelDiscovery(models_dir=f"{tmp}/models")
-            lm = ModelLoadManager(disc, max_loaded_models=2, max_loaded_bytes=150)
-            self.assertIsNotNone(lm.load("a"))
-            self.assertIsNone(lm.load("b"))  # byte budget exceeded
-            self.assertEqual(lm.resident_bytes(), 104)
-
-    def test_load_refuses_unavailable_model(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            mdir = Path(tmp) / "models"
-            mdir.mkdir()
-            (mdir / "broken.gguf").write_bytes(b"junk" * 10)
-            disc = LocalModelDiscovery(models_dir=str(mdir))
-            lm = ModelLoadManager(disc)
-            self.assertIsNone(lm.load("broken"))
+    def test_router_has_no_local_models_parameter(self):
+        import inspect
+        from zerion.cognitive_os.cognitive_router import CognitiveRouter
+        params = inspect.signature(CognitiveRouter.__init__).parameters
+        self.assertNotIn("local_models", params)
 
 
 # ---------------------------------------------------------------------------
@@ -485,93 +358,21 @@ class TestSelection(unittest.TestCase):
 # 6. OFFLINE-ONLY MODE
 # ---------------------------------------------------------------------------
 
-class TestOfflineMode(unittest.IsolatedAsyncioTestCase):
-    async def test_offline_only_selects_local_gguf_over_configured_cloud(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            make_models_dir(tmp, "local_model.gguf")
-            rt = make_router(tmp, models_dir=f"{tmp}/models")
-            cloud = StubProvider("cloud", ["c1"], local=False)
-            local = StubProvider("local_gguf", ["local_model"], local=True,
-                                 caps=("text",))
-            rt.register_provider(cloud, configured=True)
-            rt.register_provider(local, configured=True)
-            sel = rt.route(fast_task(), mode=RoutingMode.OFFLINE_ONLY)
-            self.assertEqual(sel.provider, "local_gguf")
-            self.assertEqual(sel.model, "local_model")
-            self.assertIn("offline-only", " ".join(sel.reason).lower())
+class NoOfflineModeRouting(unittest.IsolatedAsyncioTestCase):
+    """OFFLINE_ONLY mode is REMOVED: Gemini is the ONLY provider and an
+    unconfigured/unavailable Gemini yields an honest structured failure —
+    never a local-model fallback, never fabricated output."""
 
-    async def test_offline_only_never_calls_cloud(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            make_models_dir(tmp, "local_model.gguf")
-            rt = make_router(tmp, models_dir=f"{tmp}/models")
-            cloud = StubProvider("cloud", ["c1"], local=False)
-            local = StubProvider("local_gguf", ["local_model"], local=True,
-                                 caps=("text",))
-            rt.register_provider(cloud, configured=True)
-            rt.register_provider(local, configured=True)
-            res = await rt.execute(fast_task(), "q", mode=RoutingMode.OFFLINE_ONLY)
-            self.assertEqual(res.status, ResultStatus.SUCCESS)
-            self.assertEqual(cloud.calls, 0)  # cloud never invoked
+    async def test_offline_only_mode_is_gone(self):
+        self.assertFalse(any(m.value == "OFFLINE_ONLY" for m in RoutingMode))
 
-    async def test_offline_only_keeps_local_last_resort_after_health_break(self):
-        """Repeated real timeouts trip the health circuit breaker, but in
-        OFFLINE_ONLY the local provider is the ONLY legal choice: a slow phone
-        loading a 9B model legitimately times out and is not permanently
-        broken. It must stay routable (last resort) and be REALLY attempted
-        with the long load-aware timeout; a healthy result must succeed."""
-        with tempfile.TemporaryDirectory() as tmp:
-            make_models_dir(tmp, "local_model.gguf")
-            rt = make_router(tmp, models_dir=f"{tmp}/models")
-            cloud = StubProvider("cloud", ["c1"], local=False)
-            local = StubProvider("local_gguf", ["local_model"], local=True,
-                                 caps=("text",))
-            rt.register_provider(cloud, configured=True)
-            rt.register_provider(local, configured=True)
-            for _ in range(4):
-                rt.health.record_failure("local_gguf", timeout=True,
-                                         error="timeout")
-            self.assertEqual(rt.health.status("local_gguf").value,
-                             "UNAVAILABLE")
-            # Routing still picks local (last resort), never 'no eligible
-            # provider'.
-            sel = rt.route(fast_task(), mode=RoutingMode.OFFLINE_ONLY)
-            self.assertEqual(sel.provider, "local_gguf")
-            # Execution really attempts it once and succeeds.
-            res = await rt.execute(fast_task(), "q",
-                                   mode=RoutingMode.OFFLINE_ONLY)
-            self.assertEqual(res.status, ResultStatus.SUCCESS)
-            self.assertEqual(res.output, "stub answer")
-            self.assertEqual(local.calls, 1)
-            self.assertEqual(cloud.calls, 0)  # cloud never touched
-
-    async def test_offline_only_cloud_stays_excluded_when_unavailable(self):
-        """Last-resort routing is LOCAL-only: a broken cloud provider must
-        never be resurrected by OFFLINE_ONLY mode."""
-        with tempfile.TemporaryDirectory() as tmp:
-            make_models_dir(tmp, "local_model.gguf")
-            rt = make_router(tmp, models_dir=f"{tmp}/models")
-            cloud = StubProvider("cloud", ["c1"], local=False)
-            local = StubProvider("local_gguf", ["local_model"], local=True,
-                                 caps=("text",))
-            rt.register_provider(cloud, configured=True)
-            rt.register_provider(local, configured=True)
-            for _ in range(4):
-                rt.health.record_failure("cloud", timeout=True,
-                                         error="timeout")
-            self.assertEqual(rt.health.status("cloud").value, "UNAVAILABLE")
-            sel = rt.route(fast_task(), mode=RoutingMode.OFFLINE_ONLY)
-            self.assertEqual(sel.provider, "local_gguf")  # cloud excluded
-
-    async def test_offline_only_no_local_model_returns_structured_failure(self):
+    async def test_no_providers_yields_structured_failure_not_fake_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             rt = make_router(tmp)
-            cloud = StubProvider("cloud", ["c1"], local=False)
-            rt.register_provider(cloud, configured=True)
-            res = await rt.execute(deep_task(), "q", mode=RoutingMode.OFFLINE_ONLY)
+            res = await rt.execute(deep_task(), "q")
             self.assertEqual(res.status, ResultStatus.ROUTING_FAILED)
             self.assertIsNone(res.output)  # NO fabricated answer
-            self.assertTrue(any("offline-only" in e for e in res.errors))
-            self.assertEqual(cloud.calls, 0)
+            self.assertTrue(res.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -865,11 +666,15 @@ class TestVerificationIntegration(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             rt = await self._rt(tmp)
             try:
+                # Detach all providers so this test never touches the network.
+                router = rt.cognitive_router
+                router._providers.clear()
+                router._provider_order.clear()
+                router._models.clear()
                 res = await rt.execute_task(
-                    deep_task(verification_required=True), "q",
-                    mode=RoutingMode.OFFLINE_ONLY)
-                # no usable local model in this runtime -> structured failure,
-                # but verification semantics are still explicit.
+                    deep_task(verification_required=True), "q")
+                # No eligible provider -> structured failure, but verification
+                # semantics are still explicit.
                 self.assertEqual(res.verification_status,
                                  VerificationStatus.MODEL_OUTPUT)
             finally:
@@ -1027,8 +832,7 @@ class TestEventBusIntegration(unittest.IsolatedAsyncioTestCase):
                     source="cognitive_router"), dispatch_immediately=True)
 
             rt = CognitiveRouter(health=ProviderHealthTracker(), ledger=None,
-                                 local_models=LocalModelDiscovery(
-                                     models_dir=f"{tmp}/models"), emit=emit)
+                                 emit=emit)
             rt.register_provider(StubProvider("p1", ["m1"]), configured=True)
             rt.register_provider(StubProvider("p2", ["m2"]), configured=True)
             await rt.execute(fast_task(), "q", mode=RoutingMode.ONLINE_ALLOWED)
@@ -1050,8 +854,7 @@ class TestEventBusIntegration(unittest.IsolatedAsyncioTestCase):
                     source="cognitive_router"), dispatch_immediately=True)
 
             rt = CognitiveRouter(health=ProviderHealthTracker(), ledger=None,
-                                 local_models=LocalModelDiscovery(
-                                     models_dir=f"{tmp}/models"), emit=emit)
+                                 emit=emit)
             rt.register_provider(StubProvider(
                 "p1", ["m1"], fail_kind=ProviderFailureKind.QUOTA_FAILURE),
                 configured=True)
@@ -1073,9 +876,8 @@ class TestEventBusIntegration(unittest.IsolatedAsyncioTestCase):
                     source="cognitive_router"), dispatch_immediately=True)
 
             rt = CognitiveRouter(health=ProviderHealthTracker(), ledger=None,
-                                 local_models=LocalModelDiscovery(
-                                     models_dir=f"{tmp}/models"), emit=emit)
-            await rt.execute(deep_task(), "q", mode=RoutingMode.OFFLINE_ONLY)
+                                 emit=emit)
+            await rt.execute(deep_task(), "q")
             self.assertIn("ROUTING_STARTED", seen)
             self.assertIn("MODEL_SELECTED", seen)
             self.assertIn("ROUTING_FAILED", seen)
@@ -1104,20 +906,19 @@ class TestRequiredE2E(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(s2.field, CognitiveField.FAST_FIELD)
             self.assertEqual(s2.provider, "fast_provider")
 
-    async def test_e2e_scenario_3_offline_only_selects_local(self):
+    async def test_e2e_scenario_3_gemini_only_routing(self):
+        """Scenario 3 rewritten for the Gemini-only architecture: there are
+        no local models and no OFFLINE_ONLY mode; the single configured
+        provider serves every task."""
         with tempfile.TemporaryDirectory() as tmp:
-            make_models_dir(tmp, "local_model.gguf")
-            rt = make_router(tmp, models_dir=f"{tmp}/models")
-            cloud = StubProvider("cloud_configured", ["c1"], local=False)
-            local = StubProvider("local_gguf", ["local_model"], local=True,
-                                 caps=("text",))
-            rt.register_provider(cloud, configured=True)
-            rt.register_provider(local, configured=True)
-            sel = rt.route(fast_task(), mode=RoutingMode.OFFLINE_ONLY)
-            self.assertEqual(sel.provider, "local_gguf")
-            res = await rt.execute(fast_task(), "q", mode=RoutingMode.OFFLINE_ONLY)
+            rt = make_router(tmp)
+            gemini = StubProvider("gemini", ["gemini-flash"], local=False)
+            rt.register_provider(gemini, configured=True)
+            sel = rt.route(fast_task())
+            self.assertEqual(sel.provider, "gemini")
+            res = await rt.execute(fast_task(), "q")
             self.assertEqual(res.status, ResultStatus.SUCCESS)
-            self.assertEqual(cloud.calls, 0)  # configured but forbidden
+            self.assertEqual(res.output, "stub answer")
 
     async def test_e2e_scenario_4_selected_provider_fails_fallback_wins(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1140,23 +941,11 @@ class TestRequiredE2E(unittest.IsolatedAsyncioTestCase):
     async def test_e2e_scenario_5_no_provider_structured_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             rt = make_router(tmp)
-            res = await rt.execute(deep_task(), "q", mode=RoutingMode.OFFLINE_ONLY)
+            res = await rt.execute(deep_task(), "q")
             self.assertEqual(res.status, ResultStatus.ROUTING_FAILED)
             self.assertIsNone(res.output)  # NO fabricated answer
             self.assertTrue(res.errors)
 
-    async def test_e2e_local_model_discovery_required(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            make_models_dir(tmp, "model_a.gguf", "model_b.gguf")
-            mdir = Path(tmp) / "models"
-            (mdir / "not_a_model.txt").write_text("plain text")
-            (mdir / "corrupted.gguf").write_bytes(b"garbage-not-gguf")
-            disc = LocalModelDiscovery(models_dir=str(mdir))
-            self.assertEqual(sorted(m.model_id for m in disc.available()),
-                             ["model_a", "model_b"])
-            corrupted = disc.get("corrupted")
-            self.assertEqual(corrupted.status, ProviderStatus.UNAVAILABLE)
-            self.assertIn("corrupted", corrupted.status_reason)
 
 
 # ---------------------------------------------------------------------------
@@ -1169,11 +958,15 @@ class TestRuntimeWiring(unittest.IsolatedAsyncioTestCase):
             rt = CognitiveRuntime(data_dir=tmp)
             await rt.start()
             try:
-                sel = rt.route_task(fast_task(), mode=RoutingMode.OFFLINE_ONLY)
-                # No models in this runtime's models dir -> no eligible provider.
+                # Detach all providers so this test never touches the network;
+                # routing must fail honestly and structurally.
+                router = rt.cognitive_router
+                router._providers.clear()
+                router._provider_order.clear()
+                router._models.clear()
+                sel = rt.route_task(fast_task())
                 self.assertEqual(sel.provider, "")
-                res = await rt.execute_task(fast_task(), "q",
-                                            mode=RoutingMode.OFFLINE_ONLY)
+                res = await rt.execute_task(fast_task(), "q")
                 self.assertEqual(res.status, ResultStatus.ROUTING_FAILED)
                 self.assertIsNone(res.output)
                 # Events landed on the runtime's single bus.

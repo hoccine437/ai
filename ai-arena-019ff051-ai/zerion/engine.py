@@ -67,7 +67,6 @@ from zerion.cognitive_immune.immune_system import CognitiveImmuneSystem
 # --- Cognition & Compute ---
 from zerion.adaptive_cognition.controller import AdaptiveCognitiveController, AdaptiveCognitiveAllocation
 from zerion.cognition.compiler import CognitiveCompiler
-from zerion.cognition.model_fabric import ModelFabric
 from zerion.cognition.multi_path import MultiPathReasoner
 from zerion.cognition.adversarial import AdversarialEngine
 
@@ -98,22 +97,16 @@ from zerion.benchmarks.runner import BenchmarkRunner
 from zerion.benchmarks.scoreboard import DevelopmentalScoreboard
 from zerion.benchmarks.anti_gaming import AntiGamingDetector
 from zerion.ui.state_bridge import UIStateBridge
-from zerion.voice.pipeline import VoiceFirstInteractionPipeline
 from zerion.cognitive_os.organism import CognitiveOrganism, OrganismCycleResult
 from zerion.cognitive_os.objective_manager import ObjectiveContinuityManager
 from zerion.cognitive_os.cognitive_runtime import CognitiveRuntime
-from zerion.cognitive_os.gguf_discovery import resolve_models_dir
-from zerion.cognitive_os.local_model_registry import LocalModelRegistry
 from zerion.ui.visualization_adapter import VisualizationStateAdapter
 from zerion.ui.commands import CommandAPI
-from zerion.voice.providers import VoiceEnvironment
-from zerion.voice.perception_service import VoicePerceptionService
 from zerion.evolution.timeline import DevelopmentTimelineManager, DevelopmentSnapshot
 from zerion.runtime.daemon import AutonomyLevel, DevelopmentDaemon, BackgroundDiscoveryDaemon
 from zerion.cognitive_species.bridge import bridge_species_runtime
 from zerion.integration.android.mobile_runtime import MobileResourceGovernor
 from zerion.integration.termux_adapter import TermuxAdapter
-from zerion.integration.offline_fallback import OfflineFallbackManager
 from zerion.entity.state import CognitiveEntityStateStore
 from zerion.self_model.self_predictor import SelfPredictor
 from zerion.architecture.autophagy import CognitiveAutophagyEngine
@@ -181,7 +174,7 @@ class AscendantEngine:
     ZERION-X — GENESIS Master Self-Developing Runtime Engine.
     Coordinates the 25-stage continuous developmental flywheel.
     """
-    def __init__(self, data_dir: str = "data", models_dir: Optional[str] = None):
+    def __init__(self, data_dir: str = "data"):
         # Auto-load .env if present (shared, injectable loader)
         load_dotenv_files()
 
@@ -253,7 +246,6 @@ class AscendantEngine:
 
         # 9. Cognition & Evidence
         self.cognitive_compiler = CognitiveCompiler()
-        self.model_fabric = ModelFabric()
         self.multi_path = MultiPathReasoner()
         self.adversarial = AdversarialEngine()
         self.evidence = EvidenceEngine(db_path=str(self.data_dir / "evidence.db"))
@@ -281,19 +273,6 @@ class AscendantEngine:
         self.scoreboard = DevelopmentalScoreboard()
         self.anti_gaming = AntiGamingDetector()
         self.ui_bridge = UIStateBridge()
-        self.voice_env = VoiceEnvironment()
-        self.voice_pipeline = VoiceFirstInteractionPipeline(
-            engine_ref=self, ui_bridge=self.ui_bridge,
-            voice_env=self.voice_env)
-        # Slice 10.1: the always-available voice perception organ. It is
-        # engine-scoped (not UI/server-scoped): it starts with the runtime and
-        # keeps listening even when no UI is open. It only ever reports
-        # LISTENING when the microphone pipeline is genuinely active.
-        self.voice_perception = VoicePerceptionService(
-            pipeline=self.voice_pipeline,
-            voice_env=self.voice_env,
-            event_bus=self.event_bus,
-        )
 
         # 13. Cognitive OS & Autonomous Organism & Intelligence Foundry
         # NOTE: the legacy CognitiveSpeciesRuntime (zerion/cognitive_species) is
@@ -308,12 +287,10 @@ class AscendantEngine:
         # Slice 1: Cognitive Foundation — owns CognitiveState and wires the event bus,
         # Goal Field (reuses the organism's persistent objective store) and Attention
         # Economy into the runtime. No model dependencies.
-        self.models_dir = models_dir or resolve_models_dir("models")
         self.cognitive_runtime = CognitiveRuntime(
             data_dir=str(self.data_dir),
             event_bus=self.event_bus,
             objectives=self.organism.objectives,
-            models_dir=self.models_dir,
             # The canonical security boundary gates self-modification approval
             # (SYSTEM_MUTATE is never held by default -> denials are honest).
             security=self.security,
@@ -325,11 +302,6 @@ class AscendantEngine:
         )
         # Slice 10: the visualization state adapter is the only channel between
         # the runtime and the UI; commands go through the validated CommandAPI.
-        self.local_model_registry = LocalModelRegistry(
-            models_dir=self.models_dir,
-            discovery=self.cognitive_runtime.local_models,
-            load_manager=self.cognitive_runtime.cognitive_router.load_manager,
-        )
         self.ui_adapter = VisualizationStateAdapter(engine=self,
                                                     event_bus=self.event_bus)
         self.command_api = CommandAPI(engine=self)
@@ -339,9 +311,8 @@ class AscendantEngine:
 
         # 13b. Cognitive Species - legacy bridge delegated to canonical runtime
         self.cognitive_species = bridge_species_runtime(self)
-        # 14. Integration & Fallbacks
+        # 14. Integration
         self.termux = TermuxAdapter()
-        self.offline = OfflineFallbackManager(model_fabric=self.model_fabric)
 
         self._running = False
         self._cycle_count = 0
@@ -369,10 +340,6 @@ class AscendantEngine:
         # engine runs (UI/server/daemon mode gets the full event-driven loop,
         # not just the bounded per-cycle drain in run_developmental_cycle).
         self._pulse_driver_task = asyncio.create_task(self._drive_pulse_loop())
-
-        # Slice 10.1: start the always-available voice perception service
-        # (independent of the UI; reports honest microphone state).
-        await self.voice_perception.start()
 
         # Wire event handlers
         self.event_bus.subscribe(EventType.PREDICTION_ERROR, self._on_prediction_error)
@@ -409,10 +376,6 @@ class AscendantEngine:
         # Slice 1: persist cognitive state and publish RUNTIME_STOPPED before the bus closes
         try:
             await self.cognitive_runtime.stop()
-        except Exception:
-            pass
-        try:
-            await self.voice_perception.stop()
         except Exception:
             pass
         try:
@@ -587,7 +550,7 @@ class AscendantEngine:
             risk=0.2,
             phenotype=phenotype,
             available_compute_mb=snap.memory_available_mb,
-            is_offline=self.offline.is_offline
+            is_offline=False  # no offline model mode exists
         )
 
         # 7. META-PREDICTION & SELF-PREDICTOR FORECAST
@@ -905,110 +868,34 @@ def profile_mobile_io_latency_and_throughput(payload):
             "capability_name": born_cap.name if can_develop else None,
         }
 
-    # --- 7-Level Cognitive Hierarchy Query Engine ---
-    def _gguf_probe_report(self, force: bool = False) -> Dict[str, Any]:
-        """Full local-model lifecycle report with a REAL inference probe.
-
-        Evidence chain: DISCOVERED -> BACKEND -> LOAD TEST -> INFERENCE
-        PROBE -> READY. A file existing is only discovery; nothing reports
-        READY until a real load + real generation probe verified real tokens.
-        The probe result is cached for ``ZERION_GGUF_PROBE_TTL`` seconds
-        (default 60) so repeated status reads stay cheap on mobile.
-        """
-        from zerion.cognitive_os.gguf_backend import probe_local_gguf
-        cache = getattr(self, "_gguf_probe_cache", None)
-        ttl = 60
-        try:
-            ttl = max(0, int(os.environ.get("ZERION_GGUF_PROBE_TTL", "60")))
-        except ValueError:  # noqa: BLE001 — non-numeric TTL falls back to 60
-            ttl = 60
-        if cache is not None and not force \
-                and (time.monotonic() - cache["at"]) < ttl:
-            return cache["report"]
-        try:
-            report = probe_local_gguf(
-                str(self.cognitive_runtime.local_models.models_dir))
-        except Exception as e:  # noqa: BLE001
-            report = {"status": "UNKNOWN",
-                      "error": f"{type(e).__name__}: {str(e)[:200]}"}
-        self._gguf_probe_cache = {"at": time.monotonic(), "report": report}
-        return report
-
     def local_readiness(self) -> Dict[str, Any]:
-        """ZERION LOCAL READINESS — real per-subsystem states, never
-        hard-coded. Each entry is measured from the actual runtime (mic
-        monitor, STT/TTS engine detection, GGUF discovery + backend probe,
-        pulse offline mode, UI adapter). No key is required.
-        """
+        """ZERION READINESS — real per-subsystem states, never hard-coded.
+        There is no local model and no microphone: readiness reports the
+        actual Gemini provider state, cognitive runtime, and UI adapter."""
         import os as _os
-        out: Dict[str, Any] = {"mode": "LOCAL"}
+        out: Dict[str, Any] = {"mode": "GEMINI"}
 
-        # MICROPHONE
+        # PROVIDER (the only brain — Gemini via the real API integration)
         try:
-            vp = self.voice_perception
-            out["microphone"] = {
-                "status": vp.mic_status(),
-                "phase": vp.phase.value,
-                "monitor": vp.monitor.describe(),
-                "reason": vp._mic_reason or None,
+            tracker = self.cognitive_runtime.provider_health
+            snap = tracker.snapshot()
+            gemini_h = snap.get("gemini")
+            out["provider"] = {
+                "name": "gemini",
+                "configured": bool(_os.environ.get("GEMINI_API_KEY", "")),
+                "health": (gemini_h.status.value if gemini_h is not None
+                           else "UNREGISTERED"),
             }
         except Exception as e:  # noqa: BLE001
-            out["microphone"] = {"status": "UNKNOWN",
-                                 "error": f"{type(e).__name__}: {str(e)[:200]}"}
-
-        # LOCAL STT
-        try:
-            stt = self.voice_env.detect_stt().to_dict()
-            if stt.get("status") == "AVAILABLE":
-                # READY means a real speech-recognition probe succeeded — an
-                # actual transcript landed in the voice perception service.
-                # Probing the mic at startup would grab the device and is not
-                # safe, so until the first real utterance the honest state is
-                # AVAILABLE — NOT PROBED (never a false READY).
-                stt["display_status"] = "AVAILABLE — NOT PROBED"
-                try:
-                    if getattr(self.voice_perception,
-                               "_stt_success_count", 0) > 0:
-                        stt["display_status"] = "READY"
-                except Exception:  # noqa: BLE001
-                    pass
-            else:
-                stt["display_status"] = stt.get("status")
-            # Real model state from models/stt/ discovery (never assumed).
-            try:
-                from zerion.voice.stt_models import SttModelDiscovery
-                stt["models"] = SttModelDiscovery().report()
-            except Exception as e:  # noqa: BLE001
-                stt["models"] = {"status": "UNKNOWN",
-                                  "error": f"{type(e).__name__}: "
-                                            f"{str(e)[:120]}"}
-            out["stt"] = stt
-        except Exception as e:  # noqa: BLE001
-            out["stt"] = {"status": "UNKNOWN",
-                           "error": f"{type(e).__name__}: {str(e)[:200]}"}
-
-        # LOCAL TTS
-        try:
-            out["tts"] = self.voice_env.detect_tts().to_dict()
-        except Exception as e:  # noqa: BLE001
-            out["tts"] = {"status": "UNKNOWN",
-                           "error": f"{type(e).__name__}: {str(e)[:200]}"}
-
-        # LOCAL GGUF MODELS + inference backend — full lifecycle with a real
-        # probe. A file existing is only DISCOVERY; READY is earned only by a
-        # real load + real generation probe (see gguf_backend.probe_local_gguf).
-        try:
-            out["models"] = self._gguf_probe_report()
-        except Exception as e:  # noqa: BLE001
-            out["models"] = {"status": "UNKNOWN",
-                              "error": f"{type(e).__name__}: {str(e)[:200]}"}
+            out["provider"] = {"status": "UNKNOWN",
+                               "error": f"{type(e).__name__}: {str(e)[:200]}"}
 
         # COGNITIVE RUNTIME
         try:
             pulse = self.cognitive_runtime.cognitive_pulse
             out["runtime"] = {
                 "started": self._running,
-                "offline_mode": getattr(pulse, "_offline_mode", "UNKNOWN").value,
+                "provider": "gemini (only; no offline mode)",
                 "state": getattr(self.cognitive_runtime.state, "runtime_status", "UNKNOWN"),
             }
         except Exception as e:  # noqa: BLE001
@@ -1019,18 +906,10 @@ def profile_mobile_io_latency_and_throughput(payload):
         out["ui"] = {"status": ("READY" if self.ui_adapter is not None
                                   else "UNAVAILABLE")}
 
-        # NETWORK (informational; LOCAL cognition never requires it)
-        try:
-            out["network"] = self.voice_env.network.state()
-        except Exception:  # noqa: BLE001
-            out["network"] = {"state": "UNKNOWN"}
-
-        # API KEYS: informational only — never required for LOCAL cognition.
+        # API KEYS: GEMINI_API_KEY is required for cognition.
         out["keys"] = {
-            "OPENAI_API_KEY": ("SET (optional)"
-                               if _os.environ.get("OPENAI_API_KEY") else "NOT_REQUIRED"),
-            "GEMINI_API_KEY": ("SET (optional)"
-                               if _os.environ.get("GEMINI_API_KEY") else "NOT_REQUIRED"),
+            "GEMINI_API_KEY": ("SET"
+                               if _os.environ.get("GEMINI_API_KEY") else "MISSING"),
         }
         return out
 

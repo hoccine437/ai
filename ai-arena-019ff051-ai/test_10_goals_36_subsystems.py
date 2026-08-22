@@ -24,9 +24,7 @@ class GoalTest:
     def __init__(self):
         self.tmp = tempfile.mkdtemp(prefix="zerion_10goals_")
         self.data_dir = os.path.join(self.tmp, "data")
-        self.models_dir = os.path.join(self.tmp, "models")
         os.makedirs(self.data_dir, exist_ok=True)
-        os.makedirs(self.models_dir, exist_ok=True)
         self.engine = None
         self.results = []
         self.passed = 0
@@ -40,15 +38,14 @@ class GoalTest:
             "questions", "cognitive_genesis", "cognitive_genome", "cognitive_immune",
             "runtime", "self_experimentation", "cognitive_species", "self_model",
             "counterfactual", "strategy_evolution", "entity", "telemetry",
-            "evidence", "ui", "evolution", "unknown", "experiments", "voice",
+            "evidence", "ui", "evolution", "unknown", "experiments", "voice_input_removed",
             "identity", "world"
         }
 
     def setup(self):
-        """Initialize the real engine — all 36 subsystems."""
+        """Initialize the real engine — all subsystems (Gemini-only provider)."""
         self.engine = AscendantEngine(
             data_dir=self.data_dir,
-            models_dir=self.models_dir,
         )
 
     def record(self, goal_num, goal_name, subsystem, test_desc, passed, detail=""):
@@ -238,11 +235,11 @@ class GoalTest:
                         sg is not None,
                         f"type={type(sg).__name__}")
 
-            forge = self.engine.model_fabric
+            forge = getattr(self.engine, "intelligence_forge", None)
             self.record(6, "Strategy Evolution", "intelligence_forge",
-                        "Intelligence forge (model_fabric) is wired",
+                        "Intelligence forge is wired",
                         forge is not None,
-                        f"type={type(forge).__name__}")
+                        f"type={type(forge).__name__ if forge else 'NONE'}")
         except Exception as e:
             self.record(6, "Strategy Evolution", "strategy_evolution", "Goal 6 crashed", False, str(e))
 
@@ -362,11 +359,11 @@ class GoalTest:
         # ============================================================
         print("\n--- GOAL 10: Communicate and interact ---")
         try:
-            voice = self.engine.voice_pipeline
+            # Microphone/voice INPUT was REMOVED from Zerion: text-only input.
             self.record(10, "Communication", "voice",
-                        "Voice pipeline is accessible",
-                        voice is not None,
-                        f"type={type(voice).__name__}")
+                        "Voice input removed (text-only) — honestly reported",
+                        not hasattr(self.engine, "voice_pipeline"),
+                        "voice_pipeline absent by design")
 
             ui = self.engine.ui_bridge
             self.record(10, "Communication", "ui",

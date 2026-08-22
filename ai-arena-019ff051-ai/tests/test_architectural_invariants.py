@@ -29,7 +29,7 @@ Mapping (document section 12):
   I020  ROLLBACK_RESTORES_KNOWN_GOOD_STATE
 Repository-discovered additions:
   I021  SINGLE_EVENT_BUS (no second bus in the live runtime)
-  I022  OFFLINE_ONLY_NEVER_TOUCHES_CLOUD_PROVIDERS
+  I022  REMOVED — no offline mode exists; Gemini is the only provider
   I023  IDENTITY_IS_IMMUTABLE_ACROSS_RESTART
   I024  PROPOSAL_LIFECYCLE_TRANSITIONS_ARE_ENFORCED
   I025  VOICE_STATE_MACHINE_ENFORCES_TRANSITIONS
@@ -66,7 +66,6 @@ from zerion.cognitive_os.evidence import (
     Provenance,
 )
 from zerion.cognitive_os.genome import GenomeManager, GenomeStatus, GenomeStore
-from zerion.cognitive_os.gguf_discovery import LocalModelDiscovery
 from zerion.cognitive_os.improvement import (
     ImprovementProposal,
     ModificationType,
@@ -97,7 +96,6 @@ from zerion.identity.persistence import IdentityCore
 from zerion.runtime.event_bus import AsyncEventBus, EventValidationError
 from zerion.runtime.events import Event, EventType
 from zerion.runtime.security import PermissionLevel, SecurityBoundary
-from zerion.voice.state_machine import InvalidVoiceTransition, VoiceState, VoiceStateMachine
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -218,10 +216,12 @@ class TestI002UiCannotMutateCanonicalState(unittest.TestCase):
         self.assertEqual(ui.runtime_state, UIStateMode.BOOTING)
 
     def test_server_cognitive_state_endpoint_is_read_only(self):
-        src = _source_text("zerion/ui/server.py")
+        # The authoritative UI module is ui.py (main2 architecture);
+        # zerion/ui/server.py is only a compat shim re-exporting it.
+        src = _source_text("ui.py")
         self.assertIn("cr.snapshot()", src)  # GET path reads snapshot only
         # The only mutation entry point is the validated CommandAPI.
-        self.assertIn("self.engine.command_api.execute", src)
+        self.assertIn("command_api.execute", src)
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +235,6 @@ class TestI003ProviderCannotMutateCognitiveState(unittest.TestCase):
             [
                 "zerion/model_providers/provider.py",
                 "zerion/model_providers/router.py",
-                "zerion/model_providers/openai_provider.py",
                 "zerion/model_providers/gemini_provider.py",
                 "zerion/cognitive_os/provider_adapters.py",
                 "zerion/cognitive_os/cognitive_router.py",
@@ -259,34 +258,15 @@ class TestI003ProviderCannotMutateCognitiveState(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# I004 — voice cannot bypass policy
+# I004 — microphone/voice input is REMOVED (no voice subsystem may exist)
 # ---------------------------------------------------------------------------
 
 
-class TestI004VoiceCannotBypassPolicy(unittest.TestCase):
-    def test_voice_modules_do_not_touch_gate_or_canonical_state(self):
-        problems = _no_banned_imports(
-            [
-                "zerion/voice/pipeline.py",
-                "zerion/voice/perception_service.py",
-                "zerion/voice/state_machine.py",
-                "zerion/voice/session.py",
-            ],
-            [
-                "self_modification_gate",
-                "from zerion.cognitive_os.state import",
-                "cognitive_os.state import",
-                "StateStore",
-                "genome_manager.promote",
-                "self_modification_gate import SelfModificationGate",
-            ],
-        )
-        self.assertEqual(problems, [])
-
-    def test_voice_state_machine_rejects_invalid_transitions(self):
-        sm = VoiceStateMachine()
-        with self.assertRaises(InvalidVoiceTransition):
-            sm.transition(VoiceState.SPEAKING, reason="not allowed from IDLE")
+class TestI004VoiceRemoved(unittest.TestCase):
+    def test_no_voice_subsystem_exists(self):
+        import os as _os
+        self.assertFalse(_os.path.isdir("zerion/voice"),
+                         "zerion/voice must not exist: microphone removed")
 
 
 # ---------------------------------------------------------------------------
@@ -655,22 +635,6 @@ class TestI014UnknownMetricsNotReportedAsSuccess(unittest.TestCase):
         self.assertIsNone(resp.output)
         self.assertTrue(resp.error)  # Error must explain why
 
-    def test_offline_router_with_no_local_model_returns_structured_failure(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            router = CognitiveRouter(
-                health=ProviderHealthTracker(),
-                local_models=LocalModelDiscovery(models_dir=tmp),
-            )
-            task = Task(type=TaskType.REASONING, description="d", difficulty=0.4,
-                        uncertainty=0.4, novelty=0.4, stakes=0.2,
-                        goal_relevance=0.5,
-                        required_capabilities={"text"},
-                        offline_required=True)
-            result = _run(router.execute(task, "hello",
-                                         mode=RoutingMode.OFFLINE_ONLY))
-            self.assertNotEqual(result.status.value, "SUCCESS")
-            self.assertIsNone(result.output)
-            self.assertTrue(result.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -825,19 +789,6 @@ class TestI019DegradedModeDoesNotFabricateHealth(unittest.TestCase):
             self.assertEqual(pulse.state.value, "DEGRADED")
             self.assertIn("provider unavailable", pulse.degraded_reason)
 
-    def test_offline_no_provider_returns_failure_not_fabricated_output(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            router = CognitiveRouter(
-                health=ProviderHealthTracker(),
-                local_models=LocalModelDiscovery(models_dir=tmp),
-            )
-            task = Task(type=TaskType.REASONING, description="d", difficulty=0.4,
-                        uncertainty=0.4, novelty=0.4, stakes=0.2,
-                        goal_relevance=0.5)
-            result = _run(router.execute(task, "hello",
-                                         mode=RoutingMode.OFFLINE_ONLY))
-            self.assertIsNone(result.output)
-            self.assertNotEqual(result.status.value, "SUCCESS")
 
 
 # ---------------------------------------------------------------------------
@@ -890,7 +841,6 @@ class TestI021SingleEventBus(unittest.TestCase):
             engine = AscendantEngine(data_dir=tmp)
             self.assertIs(engine.event_bus, engine.cognitive_runtime.event_bus)
             self.assertIs(engine.event_bus, engine.ui_adapter.event_bus)
-            self.assertIs(engine.event_bus, engine.voice_perception.event_bus)
 
     def test_subsystems_never_construct_their_own_bus(self):
         # UI adapter and voice service take the bus by injection; they never
@@ -900,55 +850,10 @@ class TestI021SingleEventBus(unittest.TestCase):
         problems = _no_banned_imports(
             [
                 "zerion/ui/visualization_adapter.py",
-                "zerion/voice/perception_service.py",
             ],
             ["AsyncEventBus(db_path=", "AsyncEventBus()"],
         )
         self.assertEqual(problems, [])
-
-
-# ---------------------------------------------------------------------------
-# I022 — OFFLINE_ONLY never touches cloud providers
-# ---------------------------------------------------------------------------
-
-
-class _FakeCloudProvider(_FakeLocalProvider):
-    provider_name = "fake_cloud"
-    is_local = False
-
-
-class TestI022OfflineOnlyNeverTouchesCloud(unittest.TestCase):
-    def test_offline_only_excludes_non_local_providers(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            router = CognitiveRouter(
-                health=ProviderHealthTracker(),
-                local_models=LocalModelDiscovery(models_dir=tmp),
-            )
-            router.register_provider(_FakeLocalProvider(), configured=True)
-            router.register_provider(_FakeCloudProvider(), configured=True)
-            task = Task(type=TaskType.REASONING, description="d", difficulty=0.4,
-                        uncertainty=0.4, novelty=0.4, stakes=0.2,
-                        goal_relevance=0.5,
-                        required_capabilities={"text"})
-            selection = router.route(task, mode=RoutingMode.OFFLINE_ONLY)
-            self.assertEqual(selection.provider, "fake_local")
-            self.assertNotEqual(selection.provider, "fake_cloud")
-
-    def test_offline_only_with_only_cloud_fails_honestly(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            router = CognitiveRouter(
-                health=ProviderHealthTracker(),
-                local_models=LocalModelDiscovery(models_dir=tmp),
-            )
-            router.register_provider(_FakeCloudProvider(), configured=True)
-            task = Task(type=TaskType.REASONING, description="d", difficulty=0.4,
-                        uncertainty=0.4, novelty=0.4, stakes=0.2,
-                        goal_relevance=0.5,
-                        required_capabilities={"text"})
-            result = _run(router.execute(task, "hello",
-                                         mode=RoutingMode.OFFLINE_ONLY))
-            self.assertNotEqual(result.status.value, "SUCCESS")
-            self.assertIsNone(result.output)
 
 
 # ---------------------------------------------------------------------------
@@ -991,24 +896,6 @@ class TestI024ProposalTransitionsEnforced(unittest.TestCase):
         with self.assertRaises(ValueError):
             proposal.transition(ProposalStatus.APPROVED)  # REJECTED is terminal
 
-
-# ---------------------------------------------------------------------------
-# I025 — voice state machine enforces transitions (repository-discovered)
-# ---------------------------------------------------------------------------
-
-
-class TestI025VoiceStateMachineEnforcesTransitions(unittest.TestCase):
-    def test_idle_cannot_jump_to_speaking(self):
-        sm = VoiceStateMachine()
-        with self.assertRaises(InvalidVoiceTransition):
-            sm.transition(VoiceState.SPEAKING, reason="jump")
-
-    def test_valid_lifecycle_transition_works(self):
-        sm = VoiceStateMachine()
-        sm.transition(VoiceState.LISTENING, reason="wake")
-        sm.transition(VoiceState.THINKING, reason="routing")
-        sm.transition(VoiceState.SPEAKING, reason="utterance")
-        self.assertEqual(sm.state, VoiceState.SPEAKING)
 
 # ---------------------------------------------------------------------------
 # I026 — ONE canonical Zerion identity (freeze blocker 1)
@@ -1057,26 +944,25 @@ class TestI026OneCanonicalZerionIdentity(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-class _FakeVoiceState:
-    value = "LISTENING"
-
-
-class _FakeVoiceMachine:
-    state = _FakeVoiceState()
-
-
-class _FakeVoicePipeline:
-    def __init__(self):
-        self.state_machine = _FakeVoiceMachine()
-
-    async def stop_listening(self):
-        return None
-
-
 class _GrantingEngineStub:
+    """Engine double for command-dispatch tests. Voice input is removed from
+    Zerion, so the canonical internal-execute command is PAUSE_PULSE, which
+    needs a minimal cognitive_runtime with a pausable pulse."""
+
     def __init__(self):
         self.security = SecurityBoundary()
-        self.voice_pipeline = _FakeVoicePipeline()
+        import types
+
+        class _Pulse:
+            state = types.SimpleNamespace(value="RUNNING")
+
+            async def pause(self):
+                self.state = types.SimpleNamespace(value="PAUSED")
+
+        class _CRT:
+            cognitive_pulse = _Pulse()
+
+        self.cognitive_runtime = _CRT()
 
 
 class _LockedBoundary(SecurityBoundary):
@@ -1102,10 +988,20 @@ class _NoExecuteBoundary(SecurityBoundary):
 
 class TestI027SecurityBoundaryWiredIntoExecution(unittest.TestCase):
     def test_authorized_command_dispatches(self):
+        # STOP_LISTENING was removed with the microphone; PAUSE_PULSE is the
+        # canonical internal-execute command to prove authorized dispatch.
         from zerion.ui.commands import CommandAPI
         api = CommandAPI(engine=_GrantingEngineStub())
-        result = _run(api.execute("STOP_LISTENING"))
+        result = _run(api.execute("PAUSE_PULSE"))
         self.assertEqual(result["status"], "OK")
+
+    def test_removed_voice_commands_are_rejected(self):
+        from zerion.ui.commands import CommandAPI
+        api = CommandAPI(engine=_GrantingEngineStub())
+        for cmd in ("START_LISTENING", "STOP_LISTENING", "SET_OFFLINE_MODE"):
+            result = _run(api.execute(cmd))
+            self.assertEqual(result["status"], "VALIDATION_ERROR",
+                             f"{cmd} must no longer exist")
 
     def test_denied_command_blocks_handler(self):
         from zerion.ui.commands import CommandAPI

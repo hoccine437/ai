@@ -298,30 +298,9 @@ class ZerionToolRouter:
                 ok=False, tool=name, output="",
                 error=f"constitution gate denied tool '{name}': {reason}")
         try:
-            # Memory tools extract their fact/query from the verb phrase so
-            # "remember X" stores X (not "remember X").
-            if not argument and name in ("memory_store", "memory_recall",
-                                          "memory_forget", "memory_correct"):
-                low = (user_text or "").strip()
-                if name == "memory_store":
-                    m = _MEMORY_STORE_RE.match(low)
-                elif name == "memory_forget":
-                    m = _MEMORY_FORGET_RE.match(low)
-                elif name == "memory_correct":
-                    m = _MEMORY_CORRECT_RE.match(low)
-                else:
-                    m = _MEMORY_RECALL_RE.match(low)
-                if m is not None:
-                    # Find the first non-None capture group — patterns
-                    # beyond group 1 still need their captured value.
-                    argument = next(
-                        (g for g in m.groups() if g is not None), ""
-                    ).strip()
-                    # If extracted argument is just punctuation or too short,
-                    # use the raw user text instead — the handler will
-                    # clean it up.
-                    if len(argument) < 3:
-                        argument = ""
+            # Memory tools receive the FULL utterance and parse it inside the
+            # handler. (The old first-non-None-group extraction stored only
+            # "nickname" for "my nickname is nano808".)
             result = tool.handler(argument or user_text, self)
             return result
         except Exception as exc:  # noqa: BLE001 — honest structured failure
@@ -357,7 +336,8 @@ class ZerionToolRouter:
         return ToolResult(
             ok=True, tool="greeting",
             output=f"{time_greeting}! I am ZERION, your autonomous cognitive "
-                   f"assistant powered by Gemini.{status_hint} How can I help you today?")
+                   f"assistant (Gemini-powered when the Gemini API is "
+                   f"available).{status_hint} How can I help you today?")
 
     def _tool_identity(self, _arg: str, _router) -> ToolResult:
         try:
@@ -436,18 +416,69 @@ class ZerionToolRouter:
             pass
         return caps
 
+    _IMPERATIVE_RE = re.compile(
+        r"^(?:please\s+)?(?:remember|memorize|note(?:\s+that)?|save|store)"
+        r"(?:\s+(?:this|that))?\s*[:,]?\s*(.+)$", re.IGNORECASE)
+
+    def _parse_user_fact(self, text: str) -> str:
+        """Parse a raw user utterance into a canonical, storable fact.
+
+        "my nickname is nano808"  -> "nickname: nano808"
+        "nano808 is my nickname"  -> "nickname: nano808"
+        "call me nano"            -> "name: nano"
+        "remember it"             -> resolved from conversation history
+        "X is Y"                  -> "x: y"
+        "remember it" resolves the REFERENCE — the literal command is never
+        stored."""
+        low = (text or "").strip()
+        if not low:
+            return ""
+        m = self._IMPERATIVE_RE.match(low)
+        if m and m.group(1).strip():
+            low = m.group(1).strip().rstrip(".?!").strip()
+        low_l = low.lower().rstrip(".?! ").strip()
+        if low_l in {"it", "this", "that", "them", "those", "the previous",
+                     "the last thing", "what i said", "my nickname",
+                     "remember it", "save it", "don't forget it"} or \
+                low_l.endswith(" remember it") or low_l == "":
+            resolved = self._resolve_pronoun(low_l or "it")
+            return resolved or ""
+        # Case-preserving semantic patterns (matched on the ORIGINAL text so
+        # values like "NEXUS" or "nano808" keep their casing).
+        m = re.match(r"^(?:my\s+name\s+is|i\s+am\s+called|call\s+me)\s+(.+)$",
+                     low, re.IGNORECASE)
+        if m:
+            return f"name: {m.group(1).strip()}"
+        m = re.match(r"^my\s+(.+?)\s+is\s+(.+)$", low, re.IGNORECASE)
+        if m:
+            return f"{m.group(1).strip()}: {m.group(2).strip()}"
+        m = re.match(r"^(.+?)\s+is\s+my\s+(.+)$", low, re.IGNORECASE)
+        if m:
+            return f"{m.group(2).strip()}: {m.group(1).strip()}"
+        m = re.match(r"^i\s+(like|love|hate|prefer|enjoy)\s+(.+)$", low,
+                     re.IGNORECASE)
+        if m:
+            return f"{m.group(1).strip()}: {m.group(2).strip()}"
+        m = re.match(r"^(.+?)\s+is\s+(.+)$", low, re.IGNORECASE)
+        if m and m.group(1).strip().lower() not in (
+                "what", "who", "it", "this", "that"):
+            return f"{m.group(1).strip()}: {m.group(2).strip()}"
+        return low
+
     def _tool_memory_store(self, arg: str, _router) -> ToolResult:
-        fact = (arg or "").strip()
+        fact = self._parse_user_fact(arg or "")
         if not fact:
             return ToolResult(ok=False, tool="memory_store", output="",
-                              error="nothing to remember (empty argument)")
+                              error="nothing to remember — the reference "
+                                    "could not be resolved to a concrete fact")
         episode_store = getattr(self.runtime, "episode_store", None)
         if episode_store is None:
             return ToolResult(ok=False, tool="memory_store", output="",
                               error="episode store unavailable — cannot "
                                     "persist memory")
-        # Resolve pronouns: "remember it" -> look at recent conversation
-        pronouns = {"it", "this", "that", "them", "those"}
+        # Resolve pronouns/reference: "remember it" -> the fact just stated.
+        # (_parse_user_fact already did this; kept as a safety net.)
+        pronouns = {"it", "this", "that", "them", "those", "remember it"}
         if fact.lower().strip() in pronouns:
             resolved = self._resolve_pronoun(fact.lower().strip())
             if resolved:
@@ -475,7 +506,9 @@ class ZerionToolRouter:
             output=f"Learned: {fact}")
 
     def _resolve_pronoun(self, pronoun: str):
-        """Resolve a pronoun to the most recent relevant fact from conversation."""
+        """Resolve a pronoun/reference ("it", "that", ...) to the most recent
+        concrete fact from the conversation. Returns a canonical fact string
+        or None when nothing resolvable exists — never the literal command."""
         episode_store = getattr(self.runtime, "episode_store", None)
         if episode_store is None:
             return None
@@ -483,25 +516,64 @@ class ZerionToolRouter:
         for ep in reversed(recent):
             ctx = str(getattr(ep, "context", "") or "")
             if ctx.startswith("knowledge: "):
-                fact = ctx[len("knowledge: "):]
-                if len(fact) > 3:
+                fact = ctx[len("knowledge: "):].strip()
+                if fact and not fact.lower().startswith(
+                        ("remember", "save", "store")):
                     return fact
+                continue
             if "user message:" in ctx.lower():
                 user_msg = ctx.split("user message:", 1)[-1].strip()
-                import re
-                for pattern in [r"my\s+\w+\s+is\s+(.+)", r"\w+\s+is\s+(.+)",
-                                r"i\s+(?:like|prefer|love|hate|want|need)\s+(.+)"]:
-                    m = re.search(pattern, user_msg.lower())
-                    if m:
-                        return m.group(0).strip()
+                parsed = self._parse_user_fact(user_msg)
+                if parsed and parsed.lower() not in (
+                        "it", "this", "that", "them", "those"):
+                    return parsed
+        return None
+
+    def _lookup_key(self, key: str):
+        """Look up a stored 'key: value' memory by key (e.g. 'nickname').
+        Returns the value or None."""
+        episode_store = getattr(self.runtime, "episode_store", None)
+        if episode_store is None:
+            return None
+        norm = key.strip().lower().rstrip("?!. ")
+        singular = norm[:-1] if norm.endswith("s") else norm
+        for ep in reversed(episode_store.list()[-100:]):
+            ctx = str(getattr(ep, "context", "") or "")
+            if not ctx.startswith("knowledge: "):
+                continue
+            fact = ctx[len("knowledge: "):].strip()
+            if ":" not in fact:
+                continue
+            k, _, v = fact.partition(":")
+            k_norm = k.strip().lower()
+            if k_norm == norm or k_norm == singular:
+                return v.strip()
         return None
 
     def _tool_memory_recall(self, arg: str, _router) -> ToolResult:
-        query = (arg or "").strip().rstrip("?!.,;:")
+        raw = (arg or "").strip()
+        query = raw.rstrip("?!.,;:")
+        qlow = query.lower().strip()
+
+        # Personal key lookup: "what is my nickname" -> "Your nickname is X."
+        key_m = re.match(
+            r"^(?:what\s+(?:is|are|was)|what's|whats)\s+(?:my|the)\s+(.+?)$",
+            qlow)
+        if key_m:
+            key = key_m.group(1).strip()
+            val = self._lookup_key(key)
+            if val:
+                return ToolResult(
+                    ok=True, tool="memory_recall",
+                    output=f"Your {key} is {val}.")
+            return ToolResult(
+                ok=True, tool="memory_recall",
+                output=(f"I don't have your {key} stored yet — "
+                        f"tell me and I'll remember it."))
+
         if not query:
-            # Empty query (e.g. "what is my name?") — search for
-            # personal/user-identity memories broadly.
-            query = "name user remember"
+            # Empty query (e.g. "what do you remember?") — list knowledge.
+            query = "knowledge"
         hits: List[str] = []
         try:
             reuse = getattr(self.runtime, "experience_reuse", None)
@@ -658,35 +730,18 @@ class ZerionToolRouter:
         if self.readiness is not None:
             try:
                 r = self.readiness()
-                models = r.get("models") or {}
-                stt = r.get("stt") or {}
-                tts = r.get("tts") or {}
-                mic = r.get("microphone") or {}
-                out = (f"Runtime status: model={models.get('status', 'UNKNOWN')} "
-                       f"({models.get('probe', {}).get('inference', 'NOT_VERIFIED')}), "
-                       f"stt={stt.get('display_status') or stt.get('status', 'UNKNOWN')}, "
-                       f"tts={tts.get('status', 'UNKNOWN')}, "
-                       f"mic={mic.get('status', 'UNKNOWN')}.")
+                provider = r.get("provider") or "gemini"
+                state = r.get("provider_state") or r.get("status") or "UNKNOWN"
+                out = (f"Runtime status: provider={provider}, state={state}. "
+                       f"Input: text only (microphone removed). Gemini is the "
+                       f"only provider.")
                 return ToolResult(ok=True, tool="status", output=out)
             except Exception as exc:  # noqa: BLE001
                 return ToolResult(ok=False, tool="status", output="",
                                   error=f"readiness probe failed: {exc}")
-        models = self._model_line()
         return ToolResult(ok=True, tool="status",
-                          output=f"Local model state: {models or 'no model'}.")
-
-    def _model_line(self) -> str:
-        try:
-            discovery = getattr(self.runtime, "local_models", None)
-            if discovery is None:
-                return ""
-            available = discovery.available()
-            if not available:
-                return "no local model loaded"
-            return ", ".join(sorted(
-                str(getattr(m, "model_id", "") or "") for m in available[:3]))
-        except Exception:  # noqa: BLE001
-            return ""
+                          output="Runtime status: provider=gemini (only provider); "
+                                 "text input only.")
 
     def _tool_goals(self, _arg: str, _router) -> ToolResult:
         try:

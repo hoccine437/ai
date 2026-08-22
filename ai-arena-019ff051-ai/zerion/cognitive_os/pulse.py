@@ -18,9 +18,9 @@ Design rules enforced here:
 - Every expensive action is gated by: deduplication (aggregate equivalent
   events in a window), cooldowns (never repeat an identical investigation),
   resource budgets (DEFER/DEGRADE, never silently exceed), and priority.
-- Cognition is provider-independent (Slice 6) and offline-first: OFFLINE_ONLY
-  never touches cloud providers; if no local cognition is available the Pulse
-  queues/deferres work and keeps monitoring — it never fabricates results.
+- Cognition has exactly ONE provider (Gemini). When it is unavailable the
+  Pulse defers provider work and keeps monitoring — it never fabricates results
+  and never falls back to another brain.
 - When nothing has expected value, the Pulse is IDLE and calls no model.
 - Self-improvement only ever runs through the Slice 7 SelfModificationGate
   (proposal -> analysis -> tests -> sandbox -> benchmark -> policy ->
@@ -55,17 +55,14 @@ class PulseLifecycle(str, Enum):
     STOPPED = "STOPPED"
 
 
-class OfflineMode(str, Enum):
-    OFFLINE_ONLY = "OFFLINE_ONLY"
-    ONLINE_ALLOWED = "ONLINE_ALLOWED"
-    ONLINE_PREFERRED = "ONLINE_PREFERRED"
-    AUTO = "AUTO"
+# OfflineMode removed: there is no local model, no offline brain, and no
+# offline/online routing switch. Gemini is the only provider; when it is
+# unavailable, provider-required work is deferred honestly — never fabricated.
 
 
 # Work types whose execution chain is deterministic and never requires a
-# model provider (Slice 6 router). These are the types the Pulse may run in
-# OFFLINE_ONLY mode. Anything NOT in this set is treated as provider-required
-# and is DEFERRED (never fabricated, never run against a cloud) when offline.
+# model provider. Anything NOT in this set is treated as provider-required
+# and is DEFERRED when no provider is available.
 _LOCAL_ONLY_WORK_TYPES = {
     WorkType.GOAL_REVIEW,
     WorkType.ATTENTION_REVIEW,
@@ -130,9 +127,6 @@ DEFAULT_PULSE_CONFIG: Dict[str, Any] = {
         "network_requests_per_hour": 100,
         "concurrent_tasks": 2,
     },
-    # Gemini-first: AUTO mode uses cloud providers when available.
-    "offline_mode": "AUTO",
-
     "max_queue_size": 500,
 }
 
@@ -152,7 +146,6 @@ class CognitivePulse:
             self.config.update(config)
         self._cooldowns = dict(self.config.get("cooldowns", {}))
         self._budgets = dict(self.config.get("budgets", {}))
-        self._offline_mode = OfflineMode(self.config.get("offline_mode", "AUTO"))
         self._dedup_window_s = float(self.config.get("dedup_window_s", 60.0))
         self._retry_policy = self.config.get("retry_policy", {})
         self._repeated_failure_threshold = int(
@@ -210,8 +203,7 @@ class CognitivePulse:
         if self.state == PulseLifecycle.RUNNING:
             await self.event_bus.publish(Event(
                 event_type=EventType.PULSE_STARTED,
-                payload={"state": self.state.value,
-                         "offline_mode": self._offline_mode.value},
+                payload={"state": self.state.value},
                 source="cognitive_pulse",
                 priority=95,
             ), dispatch_immediately=True)
@@ -694,14 +686,7 @@ class CognitivePulse:
         available = float(getattr(snap, "memory_available_mb", 0.0))
         return available >= floor
 
-    # --- offline-first enforcement ------------------------------------------
-
-    def set_offline_mode(self, mode: OfflineMode) -> None:
-        """Configure the offline mode at runtime. OFFLINE_ONLY never activates
-        cloud cognition: provider-required work is deferred (queued, never
-        fabricated) and local deterministic work continues normally."""
-        self._offline_mode = OfflineMode(mode)
-        self.store.record_cycle("OFFLINE_MODE", self._offline_mode.value)
+    # --- provider availability ----------------------------------------------
 
     def _provider_available(self) -> bool:
         """Honest provider availability: at least one registered provider is
@@ -721,11 +706,10 @@ class CognitivePulse:
 
     def _provider_block_reason(self, item: CognitiveWorkItem) -> Optional[str]:
         """Why a provider-required item cannot run right now, or None.
-        Local deterministic work is never blocked by offline state."""
+        Local deterministic work is never blocked; provider-required work is
+        deferred only when no provider is genuinely available — never faked."""
         if not item.provider_required:
             return None
-        if self._offline_mode == OfflineMode.OFFLINE_ONLY:
-            return "offline mode (OFFLINE_ONLY)"
         if not self._provider_available():
             return "no provider available"
         return None
@@ -737,7 +721,7 @@ class CognitivePulse:
             reason = (w.payload or {}).get("defer_reason", "")
             if not reason:
                 continue
-            if reason in ("offline mode (OFFLINE_ONLY)", "no provider available"):
+            if reason == "no provider available":
                 if self._provider_block_reason(w) is None:
                     w.status = WorkStatus.QUEUED
                     w.payload.pop("defer_reason", None)
@@ -1341,12 +1325,11 @@ class CognitivePulse:
                     "model_inference_ms", hour),
             },
             "next_scheduled_cycle": self._next_scheduled_cycle,
-            "offline_mode": self._offline_mode.value,
             "provider_available": self._provider_available(),
             "provider_required_deferred": sum(
                 1 for w in self.store.list_work(WorkStatus.DEFERRED)
                 if (w.payload or {}).get("defer_reason") in (
-                    "offline mode (OFFLINE_ONLY)", "no provider available")),
+                    "no provider available",)),
             "voice_events_seen": self._voice_events_seen,
         }
 

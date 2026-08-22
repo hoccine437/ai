@@ -60,7 +60,7 @@ from zerion.cognitive_os.pulse_store import (
     WorkStatus,
     WorkType,
 )
-from zerion.cognitive_os.pulse import CognitivePulse, PulseLifecycle, OfflineMode
+from zerion.cognitive_os.pulse import CognitivePulse, PulseLifecycle
 from zerion.cognitive_os.policy_store import PolicyStore
 
 
@@ -465,18 +465,25 @@ class TestSchedulerAndCooldown(unittest.IsolatedAsyncioTestCase):
 # 6. Offline-first
 # ---------------------------------------------------------------------------
 
-class TestOfflineFirst(unittest.IsolatedAsyncioTestCase):
+class TestProviderAvailability(unittest.IsolatedAsyncioTestCase):
+    """There is no offline-mode switch anymore: provider-required work is
+    deferred exactly when NO provider is genuinely available (honest
+    health), and deterministic work always runs."""
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="pulse_off_")
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    async def test_offline_only_runs_local_deterministic_work(self):
+    async def test_no_provider_runs_local_deterministic_work(self):
         rt = _rt(self.tmp)
         await rt.start()
         pulse = rt.cognitive_pulse
-        pulse._offline_mode = OfflineMode.OFFLINE_ONLY
+        # Trip the Gemini circuit breaker with REAL recorded failures so the
+        # runtime honestly has no available provider.
+        for _ in range(4):
+            rt.cognitive_router.health.record_failure(
+                "gemini", timeout=True, error="timeout")
         await _publish(rt, EventType.GOAL_BLOCKED,
                        {"goal_id": "g1", "urgency": 0.9, "importance": 0.9,
                         "goal_relevance": 1.0}, priority=90)
@@ -491,13 +498,12 @@ class TestOfflineFirst(unittest.IsolatedAsyncioTestCase):
                              for w in pulse.store.list_work()))
         await rt.stop()
 
-    async def test_offline_mode_is_respected(self):
+    async def test_provider_availability_is_reported_not_offline_mode(self):
         rt = _rt(self.tmp)
         await rt.start()
         pulse = rt.cognitive_pulse
-        # Gemini-first: default is AUTO (uses cloud when available)
-        self.assertEqual(pulse._offline_mode, OfflineMode.AUTO)
-        pulse._offline_mode = OfflineMode.OFFLINE_ONLY
+        self.assertIn("provider_available", pulse.health())
+        self.assertNotIn("offline_mode", pulse.health())
         self.assertTrue(pulse.health()["running"])
         await rt.stop()
 
@@ -1179,28 +1185,34 @@ class TestUnfinishedTaskScan(unittest.IsolatedAsyncioTestCase):
         await rt.stop()
 
 
-class TestOfflineEnforcement(unittest.IsolatedAsyncioTestCase):
+class TestProviderRequiredEnforcement(unittest.IsolatedAsyncioTestCase):
+    """set_offline_mode is REMOVED. Provider-required work defers only when
+    no provider is genuinely available (honest health), never because of a
+    mode switch — and never with fabricated output."""
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="pulse_offline2_")
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    async def test_set_offline_mode_is_configurable(self):
+    async def test_no_offline_mode_switch_exists(self):
         rt = _rt(self.tmp)
         await rt.start()
         pulse = rt.cognitive_pulse
-        pulse.set_offline_mode(OfflineMode.OFFLINE_ONLY)
-        self.assertEqual(pulse.health()["offline_mode"], "OFFLINE_ONLY")
-        pulse.set_offline_mode(OfflineMode.ONLINE_ALLOWED)
-        self.assertEqual(pulse.health()["offline_mode"], "ONLINE_ALLOWED")
+        self.assertFalse(hasattr(pulse, "set_offline_mode"))
+        self.assertFalse(hasattr(pulse, "_offline_mode"))
+        self.assertNotIn("offline_mode", pulse.config)
+        self.assertNotIn("offline_mode", pulse.health())
         await rt.stop()
 
-    async def test_offline_only_defers_provider_required_work(self):
+    async def test_unavailable_provider_defers_provider_required_work(self):
         rt = _rt(self.tmp)
         await rt.start()
         pulse = rt.cognitive_pulse
-        pulse.set_offline_mode(OfflineMode.OFFLINE_ONLY)
+        # Real recorded failures trip the circuit breaker: honestly no provider.
+        for _ in range(4):
+            rt.cognitive_router.health.record_failure(
+                "gemini", timeout=True, error="timeout")
         await pulse._schedule(WorkType.QUESTION_GENERATION, priority=0.9,
                               reason="test", provider_required=True)
         await pulse.tick()
@@ -1208,76 +1220,13 @@ class TestOfflineEnforcement(unittest.IsolatedAsyncioTestCase):
                     if w.work_type == WorkType.QUESTION_GENERATION]
         self.assertEqual(len(deferred), 1)
         self.assertEqual(deferred[0].payload.get("defer_reason"),
-                         "offline mode (OFFLINE_ONLY)")
+                         "no provider available")
         self.assertFalse(any(
             w.work_type == WorkType.QUESTION_GENERATION
             and w.status == WorkStatus.COMPLETED
             for w in pulse.store.list_work()))
         await rt.stop()
 
-    @unittest.skip("Local model removed — Gemini is sole provider")
-    async def test_online_allowed_executes_provider_required_work(self):
-        rt = _rt(self.tmp)
-        await rt.start()
-        pulse = rt.cognitive_pulse
-        pulse.set_offline_mode(OfflineMode.ONLINE_ALLOWED)
-        await pulse._schedule(WorkType.QUESTION_GENERATION, priority=0.9,
-                              reason="test", provider_required=True)
-        await pulse.tick()
-        self.assertTrue(any(
-            w.work_type == WorkType.QUESTION_GENERATION
-            and w.status == WorkStatus.COMPLETED
-            for w in pulse.store.list_work()))
-        await rt.stop()
-
-    @unittest.skip("Local model removed — Gemini is sole provider")
-    async def test_offline_recovery_requeues_deferred_work(self):
-        """OFFLINE_ONLY -> ONLINE_ALLOWED: deferred provider work is requeued
-        and executed — deferred work is never lost."""
-        rt = _rt(self.tmp)
-        await rt.start()
-        pulse = rt.cognitive_pulse
-        pulse.set_offline_mode(OfflineMode.OFFLINE_ONLY)
-        await pulse._schedule(WorkType.QUESTION_GENERATION, priority=0.9,
-                              reason="test", provider_required=True)
-        await pulse.tick()
-        self.assertTrue(any(
-            w.status == WorkStatus.DEFERRED
-            for w in pulse.store.list_work()))
-        pulse.set_offline_mode(OfflineMode.ONLINE_ALLOWED)
-        await pulse.tick()
-        self.assertTrue(any(
-            w.work_type == WorkType.QUESTION_GENERATION
-            and w.status == WorkStatus.COMPLETED
-            for w in pulse.store.list_work()))
-        await rt.stop()
-
-    @unittest.skip("Local model removed — Gemini is sole provider")
-    async def test_model_inference_budget_defers_provider_required_work(self):
-        rt = _rt(self.tmp)
-        await rt.start()
-        pulse = rt.cognitive_pulse
-        # This test exercises the BUDGET path specifically, so run in AUTO
-        # (the canonical default is OFFLINE_ONLY, which defers provider work
-        # for the offline reason before the budget is consulted).
-        pulse.set_offline_mode(OfflineMode.AUTO)
-        pulse.config["budgets"] = {
-            "cpu_units_per_hour": 100.0, "api_cost_per_day": 100.0,
-            "network_requests_per_hour": 100, "concurrent_tasks": 2,
-            "model_inference_ms_per_hour": 0.05,
-        }
-        await pulse._schedule(WorkType.QUESTION_GENERATION, priority=0.9,
-                              reason="test", provider_required=True)
-        await pulse.tick()
-        deferred = [w for w in pulse.store.list_work(WorkStatus.DEFERRED)
-                    if w.work_type == WorkType.QUESTION_GENERATION]
-        self.assertEqual(len(deferred), 1)
-        self.assertEqual(deferred[0].payload.get("defer_reason"),
-                         "budget exhausted")
-        hour = time.strftime("%Y%m%d%H")
-        self.assertLessEqual(pulse.store.budget_usage(
-            "model_inference_ms", hour), 0.05)
-        await rt.stop()
 
     async def test_environment_health_never_fabricates_without_sampler(self):
         """No resource sampler available -> INSUFFICIENT_DATA recorded, no

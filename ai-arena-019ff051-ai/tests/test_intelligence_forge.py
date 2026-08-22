@@ -104,22 +104,14 @@ class TestIntelligenceForge(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(promoted)
         self.assertTrue(prop.is_validated)
 
-    def test_model_economy_selection_and_discovery(self):
-        models_dir = os.path.join(self.temp_dir, "models")
-        os.makedirs(models_dir, exist_ok=True)
-        # Create a mock .gguf file
-        with open(os.path.join(models_dir, "qwen2.5_coder_q4_k_m.gguf"), "w") as f:
-            f.write("mock_gguf_binary")
-
-        economy = ModelEconomy(models_dir=models_dir)
-        discovered = economy.discover_gguf_models()
-        self.assertEqual(len(discovered), 1)
-        self.assertEqual(discovered[0].quantization, "Q4_K_M")
-
-        # Select optimal model for reasoning
+    def test_model_economy_selection(self):
+        # Zerion has exactly ONE model: Gemini. No local GGUF discovery,
+        # no OpenAI tier, no deterministic fallback.
+        economy = ModelEconomy()
         best = economy.select_optimal_model(required_capability="reasoning")
         self.assertIsNotNone(best)
-        self.assertEqual(best.provider, "openai")
+        self.assertEqual(best.provider, "gemini")
+        self.assertIn("GEMINI_API_KEY", economy.availability())
 
     async def test_intelligence_foundry_master_cycle(self):
         foundry = IntelligenceFoundry(data_dir=self.temp_dir)

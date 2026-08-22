@@ -144,7 +144,7 @@ class ConversationContext:
         """Build a lightweight context prefix for the model.
 
         Only includes the last 5 turns to stay within the model's
-        context window. Formatted for Qwen chat template compatibility.
+        context window. Plain conversational format (Gemini).
         """
         recent = self.history[-10:]  # last 10 entries (5 user + 5 zerion)
         if not recent:

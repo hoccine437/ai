@@ -30,7 +30,7 @@ class TaskType(str, Enum):
 
 
 class RoutingMode(str, Enum):
-    OFFLINE_ONLY = "OFFLINE_ONLY"
+    # OFFLINE_ONLY removed: there is no local model and no offline brain.
     ONLINE_ALLOWED = "ONLINE_ALLOWED"
     ONLINE_PREFERRED = "ONLINE_PREFERRED"
     AUTO = "AUTO"
@@ -92,7 +92,6 @@ class Task:
     latency_budget_ms: Optional[int] = None
     cost_budget_cents: Optional[float] = None
     required_capabilities: Set[str] = field(default_factory=set)
-    offline_required: bool = False   # must never touch the internet
     verification_required: bool = False  # output must not become truth unaided
     metadata: Dict[str, Any] = field(default_factory=dict)
     task_id: str = field(default_factory=lambda: f"task_{uuid.uuid4().hex[:12]}")
@@ -110,7 +109,6 @@ class Task:
             "latency_budget_ms": self.latency_budget_ms,
             "cost_budget_cents": self.cost_budget_cents,
             "required_capabilities": sorted(self.required_capabilities),
-            "offline_required": self.offline_required,
             "verification_required": self.verification_required,
             "metadata": self.metadata,
         }

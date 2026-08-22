@@ -1,7 +1,7 @@
 """
 ZERION runtime identity & capability integration tests.
 
-Proves the local model (Qwen) is only the reasoning engine underneath a
+Proves Gemini is only the reasoning engine underneath a
 ZERION-owned runtime:
 
 - the identity layer injects ZERION identity, constitution, cognition mode,
@@ -14,7 +14,7 @@ ZERION-owned runtime:
   and never presents empty output as success;
 - every turn updates episodic memory.
 
-Hermetic: a stub model provider stands in for the GGUF engine.
+Hermetic: a stub model provider stands in for the Gemini engine.
 """
 
 import asyncio
@@ -131,7 +131,7 @@ class _ZerionIdentityTestBase(unittest.TestCase):
                         difficulty=0.3, uncertainty=0.4, novelty=0.3,
                         stakes=0.1, goal_relevance=0.5,
                         required_capabilities={TEXT},
-                        offline_required=True, verification_required=False,
+                        verification_required=False,
                         metadata={"source": "test"})
         defaults.update(overrides)
         return Task(**defaults)
@@ -152,8 +152,8 @@ class TestZerionContext(_ZerionIdentityTestBase):
         system = ctx.build_system_prompt("hello", field="FAST_FIELD")
         self.assertIn(IDENTITY_RULE, system)
         self.assertIn("ZERION-X ASCENDANT", system)
-        # Qwen is the engine, never the identity.
-        self.assertIn("Never claim to be Qwen", system)
+        # Gemini is the engine, never the identity.
+        self.assertIn("Never claim to be Gemini", system)
         # Constitution: real invariants.
         self.assertIn("INV-001", system)
         self.assertIn("Epistemic Integrity", system)
@@ -210,14 +210,14 @@ class TestZerionContext(_ZerionIdentityTestBase):
 
 
 class TestToolRouter(_ZerionIdentityTestBase):
-    def test_identity_tool_reports_zerion_not_qwen(self):
+    def test_identity_tool_reports_zerion_not_base_model(self):
         runtime = self._runtime()
         router = ZerionToolRouter(runtime, identity=_FakeIdentity())
         self.assertEqual(router.detect("who are you?"), "identity")
         result = asyncio.run(router.execute("identity", "who are you?"))
         self.assertTrue(result.ok)
         self.assertIn("ZERION-X ASCENDANT", result.output)
-        self.assertNotIn("Qwen", result.output)
+        self.assertNotIn("Gemini", result.output)
 
     def test_capabilities_tool_lists_real_registry(self):
         runtime = self._runtime()
@@ -250,6 +250,26 @@ class TestToolRouter(_ZerionIdentityTestBase):
         recalled = asyncio.run(router.execute("memory_recall", "recall NEXUS"))
         self.assertTrue(recalled.ok)
         self.assertIn("NEXUS", recalled.output)
+
+    def test_remember_it_resolves_reference(self):
+        """The exact user scenario: "my nickname is nano808" then
+        "remember it" must resolve THE REFERENCE — the literal command is
+        never stored — and recall must answer in human phrasing."""
+        runtime = self._runtime()
+        router = ZerionToolRouter(runtime)
+        r1 = asyncio.run(router.execute("memory_store",
+                                        "my nickname is nano808"))
+        self.assertTrue(r1.ok, r1.error)
+        r2 = asyncio.run(router.execute("memory_store", "remember it"))
+        self.assertTrue(r2.ok, r2.error)
+        self.assertIn("nano808", r2.output)
+        self.assertNotIn("remember it", r2.output.lower().replace(
+            "learned: ", "learned:"))
+        r3 = asyncio.run(router.execute("memory_recall",
+                                        "what is my nickname?"))
+        self.assertTrue(r3.ok)
+        self.assertIn("nano808", r3.output)
+        self.assertIn("nickname", r3.output.lower())
 
     def test_memory_recall_honest_miss(self):
         runtime = self._runtime()
@@ -310,7 +330,7 @@ class TestSelfCritic(unittest.IsolatedAsyncioTestCase):
         return SimpleNamespace(
             output=output,
             status=SimpleNamespace(value=status),
-            errors=[], mode=RoutingMode.OFFLINE_ONLY,
+            errors=[], mode=RoutingMode.AUTO,
             metadata={}, provider="stub", model="stub-model",
             latency_ms=1.0, usage={}, verification_required=False)
 
@@ -320,7 +340,7 @@ class TestSelfCritic(unittest.IsolatedAsyncioTestCase):
                         difficulty=0.3, uncertainty=0.4, novelty=0.3,
                         stakes=0.1, goal_relevance=0.5,
                         required_capabilities={TEXT},
-                        offline_required=True, verification_required=False,
+                        verification_required=False,
                         metadata={"source": "test"})
         defaults.update(overrides)
         return Task(**defaults)
@@ -404,14 +424,14 @@ class TestExecuteTaskIdentityLoop(unittest.IsolatedAsyncioTestCase):
                         difficulty=0.3, uncertainty=0.4, novelty=0.3,
                         stakes=0.1, goal_relevance=0.5,
                         required_capabilities={TEXT},
-                        offline_required=True, verification_required=False,
+                        verification_required=False,
                         metadata={"source": "test"})
         defaults.update(overrides)
         return Task(**defaults)
 
     async def test_model_prompt_contains_zerion_identity(self):
         result = await self.runtime.execute_task(
-            self._task("tell me about quantum physics"), "tell me about quantum physics", mode=RoutingMode.OFFLINE_ONLY)
+            self._task("tell me about quantum physics"), "tell me about quantum physics", mode=RoutingMode.AUTO)
         self.assertEqual(result.status.value, "SUCCESS")
         self.assertEqual(result.output, "hello from stub engine")
         # The provider received the ZERION identity context, not bare text.
@@ -426,17 +446,17 @@ class TestExecuteTaskIdentityLoop(unittest.IsolatedAsyncioTestCase):
         self.assertIn("tell me about quantum physics", ep.context)
         self.assertTrue(ep.success)
 
-    async def test_who_are_you_fast_path_is_zerion_not_qwen(self):
+    async def test_who_are_you_fast_path_is_zerion_not_base_model(self):
         stub_calls = len(self.stub.calls)
         result = await self.runtime.execute_task(
             self._task("who are you?"), "who are you?",
-            mode=RoutingMode.OFFLINE_ONLY)
+            mode=RoutingMode.AUTO)
         self.assertEqual(result.provider, "local_tool")
         # The fast path answers from the REAL identity store — the stub model
-        # was never called, and Qwen never introduces itself.
+        # was never called, and Gemini never introduces itself.
         self.assertEqual(len(self.stub.calls), stub_calls)
         self.assertIn("I am ZERION", result.output)
-        self.assertNotIn("Qwen", result.output)
+        self.assertNotIn("Gemini", result.output)
         # The turn is still recorded to episodic memory.
         self.assertGreaterEqual(self.runtime.episode_store.count(), 1)
 
@@ -446,7 +466,7 @@ class TestExecuteTaskIdentityLoop(unittest.IsolatedAsyncioTestCase):
                 ["observe_reality", "causal_inference", "memory_store"]))
         result = await self.runtime.execute_task(
             self._task("what can you do?"), "what can you do?",
-            mode=RoutingMode.OFFLINE_ONLY)
+            mode=RoutingMode.AUTO)
         self.assertEqual(result.provider, "local_tool")
         self.assertIn("observe_reality", result.output)
         self.assertIn("causal_inference", result.output)
@@ -456,11 +476,11 @@ class TestExecuteTaskIdentityLoop(unittest.IsolatedAsyncioTestCase):
         await self.runtime.execute_task(
             self._task("remember the passcode is 4242"),
             "remember the passcode is 4242",
-            mode=RoutingMode.OFFLINE_ONLY)
+            mode=RoutingMode.AUTO)
         self.assertGreaterEqual(self.runtime.episode_store.count(), 1)
         result = await self.runtime.execute_task(
             self._task("recall the passcode"), "recall the passcode",
-            mode=RoutingMode.OFFLINE_ONLY)
+            mode=RoutingMode.AUTO)
         self.assertEqual(result.provider, "local_tool")
         self.assertIn("4242", result.output)
 
@@ -471,7 +491,7 @@ class TestExecuteTaskIdentityLoop(unittest.IsolatedAsyncioTestCase):
                           stakes=0.9)
         result = await self.runtime.execute_task(
             task, "complex novel high-stakes problem",
-            mode=RoutingMode.OFFLINE_ONLY)
+            mode=RoutingMode.AUTO)
         # The stub returned the same text for both passes; the critic kept the
         # original and recorded the decision (bounded, terminates).
         self.assertEqual(result.output, "maybe")
@@ -483,7 +503,7 @@ class TestExecuteTaskIdentityLoop(unittest.IsolatedAsyncioTestCase):
     async def test_empty_model_output_is_honest_failure(self):
         self.stub.script = None  # stub returns no output
         result = await self.runtime.execute_task(
-            self._task("tell me about quantum physics"), "tell me about quantum physics", mode=RoutingMode.OFFLINE_ONLY)
+            self._task("tell me about quantum physics"), "tell me about quantum physics", mode=RoutingMode.AUTO)
         self.assertIsNone(result.output)
         self.assertNotEqual(result.status.value, "SUCCESS")
         decisions = [d["decision"] for d in result.metadata.get(
@@ -507,7 +527,7 @@ class TestExecuteTaskIdentityLoop(unittest.IsolatedAsyncioTestCase):
         self.stub.script = script
         result = await self.runtime.execute_task(
             self._task("state your identity formally"),
-            "state your identity formally", mode=RoutingMode.OFFLINE_ONLY)
+            "state your identity formally", mode=RoutingMode.AUTO)
         self.assertEqual(len(calls), 2)
         self.assertIn("Tool result:", calls[1])
         self.assertIn("ZERION-X ASCENDANT", result.output)

@@ -65,7 +65,7 @@ class TestCognitiveSpecies(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["primary_bottleneck"], "MODEL_LATENCY_LIMITATION")
 
     def test_cognitive_router_depth_and_failover(self):
-        router = CognitiveRouter(models_dir=os.path.join(self.temp_dir, "models"))
+        router = CognitiveRouter()
         
         # Test low-risk reflex depth
         d_reflex = router.compute_cognitive_depth(uncertainty=0.1, novelty=0.1, stakes_risk=0.1, goal_relevance=0.2)

@@ -6,7 +6,6 @@ from zerion.cognition.cells import CognitiveCell, CellType, CellInput, CellOutpu
 from zerion.cognition.program import CognitiveProgram, ProgramStep
 from zerion.cognition.compiler import CognitiveCompiler
 from zerion.cognition.adaptive_compute import ComputeMode, ComputeProfile, resolve_compute_profile, COMPUTE_PROFILES
-from zerion.cognition.model_fabric import ModelFabric, ModelDescriptor
 from zerion.cognition.multi_path import MultiPathReasoner, ReasoningPathResult
 from zerion.cognition.adversarial import AdversarialEngine, AdversarialAttackResult
 
@@ -22,8 +21,6 @@ __all__ = [
     "ComputeProfile",
     "resolve_compute_profile",
     "COMPUTE_PROFILES",
-    "ModelFabric",
-    "ModelDescriptor",
     "MultiPathReasoner",
     "ReasoningPathResult",
     "AdversarialEngine",

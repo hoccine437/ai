@@ -162,14 +162,8 @@ from zerion.cognitive_os.provider_interface import (
 )
 from zerion.cognitive_os.provider_health import ProviderHealth, ProviderHealthTracker
 from zerion.cognitive_os.performance_ledger import PerformanceLedger, PerformanceStats
-from zerion.cognitive_os.gguf_discovery import LocalModelDiscovery, ModelLoadManager
-from zerion.cognitive_os.local_model_registry import LocalModelRegistry
 from zerion.cognitive_os.cognitive_router import CognitiveRouter, ModelSelector
-from zerion.cognitive_os.provider_adapters import (
-    LegacyGeminiAdapter,
-    LegacyGGUFAdapter,
-    LegacyOpenAIAdapter,
-)
+from zerion.cognitive_os.provider_adapters import LegacyGeminiAdapter
 from zerion.cognitive_os.telemetry import ArchitectureTelemetry, ComponentMetric
 from zerion.cognitive_os.bottlenecks import (
     BottleneckDetector,

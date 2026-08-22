@@ -1,17 +1,17 @@
 """
-Cognitive Router for ZERION-X — Gemini-only with deterministic fallback.
+Cognitive Router for ZERION-X — Gemini-only.
 
-Provider priority:
-  1. Gemini 3.1 Flash (when GEMINI_API_KEY is set) — fast, free, good quality
-  2. Deterministic fallback — always available, no model needed
+There is exactly ONE provider: Gemini. When it is unavailable (missing key,
+network failure, API error) the router returns an honest structured failure —
+it never substitutes a deterministic/fake/local brain.
 """
 
 from enum import Enum
-import time
-from typing import Any, Dict, List, Optional
+from typing import Optional
+
 from zerion.model_providers.provider import ModelProvider, ModelResponse
-from zerion.model_providers.gemini_provider import GeminiProvider, LocalGGUFProvider
-from zerion.model_providers.openai_provider import DeterministicFallbackProvider
+from zerion.model_providers.gemini_provider import GeminiProvider
+from zerion.runtime.evidence import ExecutionMode
 
 
 class CognitiveDepthLevel(str, Enum):
@@ -25,13 +25,8 @@ class CognitiveDepthLevel(str, Enum):
 
 
 class CognitiveRouter:
-    def __init__(self, models_dir: str = "models"):
-        from zerion.cognitive_os.gguf_discovery import resolve_models_dir
-        models_dir = resolve_models_dir(models_dir)
-        self.providers: Dict[str, ModelProvider] = {
-            "gemini": GeminiProvider(),
-            "deterministic_local": DeterministicFallbackProvider()
-        }
+    def __init__(self):
+        self.providers = {"gemini": GeminiProvider()}
 
     def compute_cognitive_depth(
         self,
@@ -71,21 +66,15 @@ class CognitiveRouter:
         is_voice: bool = False,
         is_offline: bool = False
     ) -> ModelResponse:
-        """Route to Gemini 3.1 Flash (primary) with deterministic fallback."""
-        # 1. Specific provider requested
-        if preferred_provider and preferred_provider in self.providers:
-            provider = self.providers[preferred_provider]
-            if provider.is_available():
-                res = await provider.generate_response(prompt)
-                if not res.is_fallback:
-                    return res
-
-        # 2. Gemini is the SOLE provider
+        """Route to Gemini — the sole provider. No fallback brain exists."""
         gemini = self.providers.get("gemini")
-        if gemini and gemini.is_available():
-            res = await gemini.generate_response(prompt)
-            if not res.is_fallback:
-                return res
-
-        # 3. Deterministic fallback (always works, no model needed)
-        return await self.providers["deterministic_local"].generate_response(prompt)
+        if gemini is None or not gemini.is_available():
+            return ModelResponse(
+                provider_name="gemini",
+                model_id="gemini",
+                content="[GEMINI UNAVAILABLE] GEMINI_API_KEY is missing or the "
+                        "provider is unreachable. No offline/fake fallback exists.",
+                execution_mode=ExecutionMode.FALLBACK_RESPONSE,
+                is_fallback=True,
+            )
+        return await gemini.generate_response(prompt)

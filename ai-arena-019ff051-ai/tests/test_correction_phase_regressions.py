@@ -17,8 +17,7 @@ from zerion.runtime.evidence import (
 from zerion.runtime.reality_audit import run_reality_audit
 from zerion.self_model.maturity import CognitiveMaturityEvaluator, MaturityLevel
 from zerion.benchmarks.scoreboard import DevelopmentalScoreboard
-from zerion.model_providers.openai_provider import OpenAIProvider, DeterministicFallbackProvider
-from zerion.model_providers.gemini_provider import GeminiProvider, LocalGGUFProvider
+from zerion.model_providers.gemini_provider import GeminiProvider
 from zerion.evolution.self_modification import ControlledSelfModificationEngine, ModificationProposal
 from zerion.evolution.plasticity import CognitivePlasticityManager
 
@@ -133,43 +132,29 @@ class TestScoreboardProvenance(unittest.TestCase):
 
 class TestProviderFallbackHonesty(unittest.TestCase):
     """
-    Before: with no API key configured, OpenAIProvider returned a canned string
-    with fabricated token counts (20/30) and cost (0.0) that were
-    indistinguishable from a real response except for an internal is_fallback
-    flag most callers never checked. GeminiProvider and LocalGGUFProvider
-    always returned canned text regardless of key/model-file presence, one of
-    them (LocalGGUFProvider) even reporting is_fallback=False.
+    Gemini is the ONLY provider (OpenAI/local-GGUF providers were removed).
+    With no API key configured, GeminiProvider returns an honestly-marked
+    FALLBACK response — never fabricated telemetry, never another brain.
     """
-    def test_openai_fallback_is_marked_and_does_not_fake_telemetry(self):
-        os.environ.pop("OPENAI_API_KEY", None)
-        provider = OpenAIProvider()
+    def test_gemini_fallback_is_marked_and_does_not_fake_telemetry(self):
+        os.environ.pop("GEMINI_API_KEY", None)
+        provider = GeminiProvider()
+        self.assertFalse(provider.is_available())
         response = asyncio.run(provider.generate_response("test prompt"))
         self.assertEqual(response.execution_mode, ExecutionMode.FALLBACK_RESPONSE)
         self.assertTrue(response.is_fallback)
-        self.assertIsNone(response.prompt_tokens)
-        self.assertIsNone(response.completion_tokens)
         self.assertIsNone(response.cost_cents)
         self.assertIn("FALLBACK", response.content)
 
-    def test_gemini_fallback_is_marked(self):
-        os.environ.pop("GEMINI_API_KEY", None)
-        provider = GeminiProvider()
-        response = asyncio.run(provider.generate_response("test"))
-        self.assertEqual(response.execution_mode, ExecutionMode.FALLBACK_RESPONSE)
-        self.assertIsNone(response.cost_cents)
-
-    def test_local_gguf_without_model_file_is_marked_fallback(self):
-        provider = LocalGGUFProvider(models_dir="/tmp/zerion_test_no_such_dir")
-        self.assertFalse(provider.is_available())
-        response = asyncio.run(provider.generate_response("test"))
-        # Previously this incorrectly reported is_fallback=False unconditionally.
-        self.assertEqual(response.execution_mode, ExecutionMode.FALLBACK_RESPONSE)
-        self.assertTrue(response.is_fallback)
-
-    def test_deterministic_provider_is_honestly_labeled_simulation(self):
-        provider = DeterministicFallbackProvider()
-        response = asyncio.run(provider.generate_response("test"))
-        self.assertEqual(response.execution_mode, ExecutionMode.SIMULATION)
+    def test_no_other_provider_exists(self):
+        import zerion.model_providers as mp
+        import zerion.model_providers.provider as mpp
+        for banned in ("OpenAIProvider", "DeterministicFallbackProvider",
+                       "LocalGGUFProvider"):
+            self.assertFalse(any(banned == n for n in dir(mp)),
+                             f"{banned} must not exist in model_providers")
+            self.assertFalse(any(banned == n for n in dir(mpp)),
+                             f"{banned} must not exist in provider interface")
 
 
 class TestSelfModificationBypassResistance(unittest.TestCase):

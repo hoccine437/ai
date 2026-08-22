@@ -1,9 +1,8 @@
 """
 ZERION runtime identity & context layer.
 
-The local GGUF model (Qwen) is ONLY the reasoning engine of the system. This
-module builds the system context that makes ZERION the identity of every
-conversation:
+Gemini is ONLY the reasoning engine of the system. This module builds the
+system context that makes ZERION the identity of every conversation:
 
     ZERION IDENTITY
         -> ZERION CONSTITUTION
@@ -12,29 +11,29 @@ conversation:
         -> ZERION GOALS
         -> ZERION CAPABILITY REGISTRY
         -> ZERION TOOL / AGENT ROUTER
-        -> LOCAL MODEL (Qwen)
+        -> GEMINI (reasoning engine)
 
 Every section is derived from REAL runtime state (identity store, invariants,
-objective store, memory stores, capability registry, model registry) — never
-hard-coded persona text. The result is size-bounded so a 1.5B phone model
-receives a small relevant context, not an architecture dump
-(``ZERION_CONTEXT_MAX_CHARS``, default 1400; sections are dropped tail-first
-when the budget is exceeded, with the identity rule never truncated).
+objective store, memory stores, capability registry) — never hard-coded
+persona text. The result is size-bounded so each turn receives a small
+relevant context, not an architecture dump (``ZERION_CONTEXT_MAX_CHARS``,
+default 1400; sections are dropped tail-first when the budget is exceeded,
+with the identity rule never truncated).
 """
 
 import os
 from typing import Any, Dict, List, Optional
 
 # The identity contract every model invocation must obey. This is the runtime
-# identity layer, not a chat nicety: Qwen must never present itself as the
+# identity layer, not a chat nicety: Gemini must never present itself as the
 # system's identity, so the instruction is injected before every turn.
 IDENTITY_RULE = (
     "You are the reasoning engine operating inside ZERION, an autonomous "
     "developmental cognitive system. You are NOT the assistant and you do "
     "NOT have an identity of your own. The active system identity is ZERION. "
-    "Never claim to be Qwen, Alibaba, or any other base model — you are the "
-    "local language/reasoning engine ZERION uses. Always speak as ZERION "
-    "and refer to yourself as ZERION."
+    "Never claim to be Gemini, Google, or any other base model — you are the "
+    "reasoning engine ZERION uses. Always speak as ZERION and refer to "
+    "yourself as ZERION."
 )
 
 ZERION_MISSION = (
@@ -177,46 +176,21 @@ class ZerionRuntimeContext:
             return []
 
     def _mode(self, field: Optional[str]) -> str:
-        offline = "UNKNOWN"
-        try:
-            pulse = getattr(self.runtime, "cognitive_pulse", None)
-            if pulse is not None:
-                offline = getattr(
-                    getattr(pulse, "_offline_mode", None), "value", "UNKNOWN")
-        except Exception:  # noqa: BLE001
-            offline = "UNKNOWN"
-        mode = f"OFFLINE mode: {offline}"
+        # There is no offline mode: Gemini is the only provider.
+        mode = "provider: Gemini (only)"
         if field:
             mode += f" · cognitive field: {field}"
-        models = self._model_line()
-        if models:
-            mode += f" · engine: {models}"
         return mode
-
-    def _model_line(self) -> str:
-        try:
-            discovery = getattr(self.runtime, "local_models", None)
-            if discovery is None:
-                return ""
-            available = discovery.available()
-            if not available:
-                return "no local model loaded"
-            return ", ".join(sorted(
-                str(getattr(m, "model_id", "") or "") for m in available[:2]))
-        except Exception:  # noqa: BLE001
-            return ""
 
     def _readiness_line(self) -> str:
         if self.readiness is None:
             return ""
         try:
             r = self.readiness()
-            models = r.get("models") or {}
-            stt = r.get("stt") or {}
-            tts = r.get("tts") or {}
-            return (f"model={models.get('status', 'UNKNOWN')} "
-                    f"stt={stt.get('display_status') or stt.get('status', 'UNKNOWN')} "
-                    f"tts={tts.get('status', 'UNKNOWN')}")
+            provider = r.get("provider") or "gemini"
+            state = r.get("provider_state") or r.get("status") or "UNKNOWN"
+            return (f"provider={provider} state={state} "
+                    f"input=text-only")
         except Exception:  # noqa: BLE001
             return ""
 

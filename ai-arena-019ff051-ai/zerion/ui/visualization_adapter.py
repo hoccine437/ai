@@ -11,7 +11,7 @@ Responsibilities:
   memory or flood the UI)
 - exposes read-only UI snapshots built from the REAL runtime state (pulse
   health, CognitiveState document, router/provider health, goal/question/
-  belief/experience stores, voice pipeline state, local model registry,
+  belief/experience stores, provider state, UI bridge,
   network probe)
 - the UI can never mutate cognitive state through a snapshot: every snapshot
   is a freshly built plain-dict copy; nothing in it references a live
@@ -151,7 +151,7 @@ class VisualizationStateAdapter:
             "execution": self._safe("execution"),
             "learning": self._safe("learning"),
             "health": self._safe("health"),
-            "voice": self._safe("voice"),
+            "voice": {"removed": True},
             "models": self._safe("models"),
             "network": self._safe("network"),
             "presentation": self._safe("presentation"),
@@ -179,11 +179,6 @@ class VisualizationStateAdapter:
             state["runtime_status"] = getattr(rs, "value", str(rs))
             state["state_id"] = getattr(runtime.state, "state_id", None)
         pulse = getattr(runtime, "cognitive_pulse", None) if runtime else None
-        offline = "AUTO"
-        if pulse is not None:
-            offline = getattr(pulse, "_offline_mode", "AUTO")
-            offline = getattr(offline, "value", str(offline))
-        state["offline_mode"] = offline
         state["platform"] = self._platform()
         # Provider status from real health tracking.
         state["providers"] = {}
@@ -203,8 +198,8 @@ class VisualizationStateAdapter:
         return state
 
     def _platform(self) -> Dict[str, Any]:
-        from zerion.voice.providers import VoiceEnvironment
-        platform = VoiceEnvironment.detect_platform()
+        import platform as _platform_mod
+        platform = _platform_mod.system().upper()
         termux = getattr(self.engine, "termux", None)
         out = {"type": platform}
         if termux is not None:
@@ -362,67 +357,41 @@ class VisualizationStateAdapter:
             return "UNKNOWN"
 
     def _snap_voice(self) -> Dict[str, Any]:
-        pipeline = getattr(self.engine, "voice_pipeline", None)
-        if pipeline is None:
-            return {"state": "IDLE", "error": "voice pipeline unavailable"}
-        vs = pipeline.voice_state()
-        env = vs.get("environment", {})
+        # Voice input removed: Zerion is text-only.
         snap = {
-            "state_machine": vs.get("state_machine", {}),
-            "in_conversation": vs.get("in_conversation", False),
-            "last_error": vs.get("last_error"),
-            "history_count": vs.get("history_count", 0),
-            "stt": env.get("stt", {}),
-            "tts": env.get("tts", {}),
-            "wake": env.get("wake", {}),
+            "state_machine": {"state": "REMOVED"},
+            "in_conversation": False,
+            "last_error": None,
+            "history_count": 0,
+            "stt": {},
+            "tts": {},
+            "wake": {},
         }
-        # Slice 10.1: always-available voice perception telemetry — REAL state
-        # only. The UI shows LISTENING only when the service confirms the mic
-        # pipeline is genuinely active; never a print() assumption.
-        perception = {}
-        svc = getattr(self.engine, "voice_perception", None)
-        if svc is not None:
-            try:
-                perception = svc.telemetry()
-            except Exception as e:  # noqa: BLE001
-                perception = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
-        else:
-            perception = {"service_started": False,
-                          "mic_phase": "MIC_OFF",
-                          "health": "UNAVAILABLE",
-                          "is_listening": False,
-                          "reason": "voice perception service unavailable"}
-        snap["perception"] = perception
+        # Microphone removed: there is no voice-perception telemetry.
+        snap["perception"] = {
+            "service_started": False,
+            "mic_phase": "REMOVED",
+            "health": "UNAVAILABLE",
+            "is_listening": False,
+            "reason": "microphone functionality removed from Zerion",
+        }
         return snap
 
     def _snap_models(self) -> Dict[str, Any]:
-        registry = getattr(self.engine, "local_model_registry", None)
-        if registry is None:
-            runtime = self.runtime
-            if runtime is None:
-                return {"count": 0, "models": []}
-            # Fall back to the runtime's Slice 6 discovery.
-            disc = getattr(runtime, "local_models", None)
-            if disc is None:
-                return {"count": 0, "models": []}
-            try:
-                from zerion.cognitive_os.local_model_registry import LocalModelRegistry
-                registry = LocalModelRegistry(
-                    models_dir=str(disc.models_dir), discovery=disc)
-            except Exception:  # noqa: BLE001
-                return {"count": 0, "models": []}
+        # No local model registry exists: Gemini is the only provider.
+        runtime = self.runtime
+        if runtime is None:
+            return {"count": 0, "models": []}
         try:
-            return registry.to_dict()
-        except Exception as e:  # noqa: BLE001
-            return {"error": str(e)[:200], "count": 0, "models": []}
+            models = runtime.cognitive_router.list_models() \
+                if hasattr(runtime.cognitive_router, "list_models") else []
+        except Exception:
+            models = []
+        return {"count": len(models), "models": list(models)}
 
     def _snap_network(self) -> Dict[str, Any]:
-        pipeline = getattr(self.engine, "voice_pipeline", None)
-        if pipeline is not None:
-            try:
-                return pipeline.voice_env.network.state()
-            except Exception:  # noqa: BLE001
-                pass
+        # Informational only — Gemini is a cloud provider, but no fake
+        # connectivity state is invented here.
         return {"state": "UNKNOWN", "attempts": 0}
 
     def _snap_presentation(self) -> Dict[str, Any]:
@@ -431,26 +400,14 @@ class VisualizationStateAdapter:
         bstate = bridge.current_state if bridge is not None else None
         runtime = self.runtime
 
-        # Voice drives the visible mode when it is actively doing something.
-        # Slice 10.1 rule 17: the HUD shows LISTENING ONLY when the voice
-        # perception service confirms the microphone pipeline is genuinely
-        # active. The pipeline state machine rests in its LISTENING slot after
-        # any turn even with no mic backend; that resting state must never be
-        # presented as a listening claim.
+        # Microphone removed: the visible mode is driven by the pulse only.
+        voice_perception_state = {
+            "mic_phase": "REMOVED",
+            "health": "UNAVAILABLE",
+            "is_listening": False,
+            "reason": "microphone functionality removed from Zerion",
+        }
         voice_mode = None
-        # Real voice-perception telemetry (Slice 10.1): exposed unconditionally
-        # so the HUD can always show the true microphone state, and used to
-        # gate any LISTENING claim below.
-        voice_perception_state = self._voice_perception_summary()
-        pipeline = getattr(self.engine, "voice_pipeline", None)
-        if pipeline is not None:
-            vstate = pipeline.state_machine.state.value
-            if vstate == "LISTENING":
-                if voice_perception_state.get("is_listening"):
-                    voice_mode = vstate
-            elif vstate != "IDLE":
-                voice_mode = vstate
-        # Pulse drives it otherwise.
         pulse_mode = None
         pulse = getattr(runtime, "cognitive_pulse", None) if runtime else None
         if pulse is not None and voice_mode is None:
@@ -524,40 +481,6 @@ class VisualizationStateAdapter:
             "core_glow_intensity": bstate.core_glow_intensity if bstate else 0.85,
             "cyan_contour_activity": bstate.cyan_contour_activity if bstate else 0.5,
         }
-
-    def _voice_perception_summary(self) -> Dict[str, Any]:
-        """Honest microphone readout from the REAL perception service.
-
-        Always present so the HUD can show the true mic state (MIC_OFF /
-        INITIALIZING / LISTENING / ...) instead of assuming it. Never
-        fabricated: when the service or its telemetry is unavailable the
-        summary reports that with ``is_listening=False``.
-        """
-        svc = getattr(self.engine, "voice_perception", None)
-        if svc is None:
-            return {
-                "mic_phase": "MIC_OFF",
-                "health": "UNAVAILABLE",
-                "is_listening": False,
-                "reason": "voice perception service unavailable",
-            }
-        try:
-            tele = svc.telemetry()
-            return {
-                "mic_phase": tele.get("mic_phase", "UNKNOWN"),
-                "health": tele.get("health", "UNKNOWN"),
-                "is_listening": bool(tele.get("is_listening")),
-                "listening_mode": tele.get("listening_mode"),
-                "reason": (tele.get("mic_reason")
-                            or (tele.get("mic") or {}).get("reason")),
-            }
-        except Exception as e:  # noqa: BLE001
-            return {
-                "mic_phase": "UNKNOWN",
-                "health": "UNKNOWN",
-                "is_listening": False,
-                "reason": f"{type(e).__name__}: {str(e)[:200]}",
-            }
 
     @staticmethod
     def _resolve_mode(voice_mode, pulse_mode):

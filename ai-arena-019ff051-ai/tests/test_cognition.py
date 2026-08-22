@@ -9,7 +9,6 @@ from zerion.cognition.program import CognitiveProgram
 from zerion.cognition.multi_path import MultiPathReasoner
 from zerion.cognition.adversarial import AdversarialEngine
 from zerion.cognition.adaptive_compute import resolve_compute_profile, ComputeMode
-from zerion.cognition.model_fabric import ModelFabric
 
 
 class TestCognition(unittest.IsolatedAsyncioTestCase):
@@ -43,12 +42,6 @@ class TestCognition(unittest.IsolatedAsyncioTestCase):
         prof_extreme = resolve_compute_profile(urgency=0.5, uncertainty=0.9, impact=0.9)
         self.assertEqual(prof_extreme.mode, ComputeMode.EXPERIMENTAL)
 
-    async def test_model_fabric_routing(self):
-        fabric = ModelFabric()
-        selected = fabric.select_best_model(task_type="reasoning")
-        self.assertIsNotNone(selected)
-        inv_res = await fabric.invoke(selected, "Compute optimal search strategy")
-        self.assertTrue(inv_res["success"])
 
 
 if __name__ == "__main__":

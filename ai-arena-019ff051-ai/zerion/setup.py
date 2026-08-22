@@ -37,19 +37,13 @@ setup(
     },
     data_files=[("ui/zerion", ui_kt_files)] if ui_kt_files else [],
     python_requires=">=3.9",
-    # Core runtime is pure Python 3.9+ standard library: 100% local
-    # cognition needs zero third-party packages. httpx is OPTIONAL — it is
-    # used only by the legacy OpenAI adapter, which OFFLINE_ONLY routing
-    # structurally excludes. The `openai` SDK is intentionally absent: the
-    # runtime never imports it, and its jiter dependency has no
-    # Termux/Android aarch64 wheel. Pins are synchronized with
-    # requirements.txt and pyproject.toml; every pin supports Python 3.9.
+    # Core runtime is pure Python 3.9+ standard library. Cognition runs on
+    # Gemini via the stdlib urllib API integration — no OpenAI SDK, no local
+    # inference engine, no audio capture packages. Pins are synchronized
+    # with requirements.txt and pyproject.toml; every pin supports 3.9+.
     install_requires=[],
     # Mirrors pyproject.toml [project.optional-dependencies].
     extras_require={
-        "online": ["httpx==0.28.1"],
-        "local_llm": ["llama-cpp-python==0.3.34"],
-        "audio": ["sounddevice==0.5.5", "numpy==2.0.2"],
         "dev": [
             "pytest==8.3.5",
             "pytest-asyncio==1.2.0",
@@ -57,10 +51,6 @@ setup(
             "mypy==1.19.1",
         ],
         "all": [
-            "httpx==0.28.1",
-            "llama-cpp-python==0.3.34",
-            "sounddevice==0.5.5",
-            "numpy==2.0.2",
             "pytest==8.3.5",
             "pytest-asyncio==1.2.0",
             "ruff==0.16.3",

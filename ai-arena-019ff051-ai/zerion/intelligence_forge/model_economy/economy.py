@@ -1,21 +1,21 @@
 """
-Model Economy & Model Discovery Substrate for ZERION-X Ω
-Manages interchangeable foundation models (OpenAI API, Local GGUF discovery, Specialists, Heuristic engines)
-with dynamic cost/latency routing and zero-downtime fallback.
+Model Economy & Model Registry for ZERION-X Ω
+
+There is exactly ONE foundation model: Gemini. This module keeps the model
+profile registry the Foundry uses for episode metadata. There is no OpenAI
+tier, no deterministic fallback tier, and no local GGUF discovery anywhere in
+Zerion — when Gemini is unavailable its state is reported honestly.
 """
 
 from dataclasses import dataclass, field
-import glob
 import os
-from pathlib import Path
-import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import List, Optional
 
 
 @dataclass
 class ModelProfile:
     model_id: str
-    provider: str               # "openai", "local_gguf", "deterministic_local", "specialist"
+    provider: str               # "gemini" — the only provider
     tier: str                   # "FAST", "REASONING", "CODING", "REFLEX"
     cost_per_1k_tokens: float
     avg_latency_ms: float
@@ -28,66 +28,26 @@ class ModelProfile:
 
 
 class ModelEconomy:
-    def __init__(self, models_dir: str = "models"):
-        self.models_dir = Path(models_dir)
-        self._registry: Dict[str, ModelProfile] = {}
-        self._bootstrap_foundation_models()
-        self.discover_gguf_models()
+    """Registry of the single authoritative model: Gemini."""
 
-    def _bootstrap_foundation_models(self):
-        # OpenAI Foundation Tier (Official production models)
-        self._registry["openai_gpt4o_mini"] = ModelProfile(
-            model_id="openai_gpt4o_mini",
-            provider="openai",
-            tier="FAST",
-            cost_per_1k_tokens=0.00015,
-            avg_latency_ms=350.0,
-            context_window=128000,
-            capabilities=["reasoning", "structured_output", "tool_calling"]
-        )
-        self._registry["openai_gpt4o"] = ModelProfile(
-            model_id="openai_gpt4o",
-            provider="openai",
+    def __init__(self, models_dir: str = "models"):
+        # models_dir kept for constructor compatibility; no local models exist.
+        self._registry = {"gemini": ModelProfile(
+            model_id="gemini",
+            provider="gemini",
             tier="REASONING",
-            cost_per_1k_tokens=0.005,
-            avg_latency_ms=750.0,
-            context_window=128000,
-            capabilities=["deep_reasoning", "multimodal", "code_synthesis"]
-        )
-        # Local Micro / Deterministic Fallback Tiers
-        self._registry["deterministic_local"] = ModelProfile(
-            model_id="deterministic_local",
-            provider="deterministic_local",
-            tier="REFLEX",
             cost_per_1k_tokens=0.0,
-            avg_latency_ms=2.0,
-            context_window=32000,
-            capabilities=["procedural_execution", "invariant_checks", "reflex"]
-        )
+            avg_latency_ms=450.0,
+            context_window=1_000_000,
+            is_available=bool(os.environ.get("GEMINI_API_KEY", "")),
+            reliability=0.98,
+            capabilities=["reasoning", "structured_output", "tool_calling",
+                          "multimodal", "code_synthesis"],
+        )}
 
     def discover_gguf_models(self) -> List[ModelProfile]:
-        """Automatically discovers any local .gguf models in models/ directory."""
-        discovered = []
-        if not self.models_dir.exists():
-            return discovered
-
-        for file_path in glob.glob(str(self.models_dir / "*.gguf")):
-            p = Path(file_path)
-            model_id = f"gguf_{p.stem.lower()}"
-            profile = ModelProfile(
-                model_id=model_id,
-                provider="local_gguf",
-                tier="FAST",
-                cost_per_1k_tokens=0.0,
-                avg_latency_ms=45.0,
-                context_window=8192,
-                path=str(p),
-                quantization="Q4_K_M" if "q4" in p.stem.lower() else "Q8_0",
-                capabilities=["local_reasoning", "offline"]
-            )
-            self._registry[model_id] = profile
-            discovered.append(profile)
-        return discovered
+        """Removed: there are no local GGUF models in Zerion. Always empty."""
+        return []
 
     def select_optimal_model(
         self,
@@ -95,14 +55,10 @@ class ModelEconomy:
         max_cost_cents: float = 1.0,
         is_offline: bool = False
     ) -> ModelProfile:
-        """Selects the best available model based on task constraints and network availability."""
-        candidates = [
-            m for m in self._registry.values()
-            if m.is_available and (not is_offline or m.provider in ("local_gguf", "deterministic_local"))
-        ]
-        if not candidates:
-            return self._registry["deterministic_local"]
+        """Returns Gemini — the only model. There is no fallback brain."""
+        return self._registry["gemini"]
 
-        # Sort by capability match and cost efficiency
-        candidates.sort(key=lambda m: (required_capability in m.capabilities, -m.cost_per_1k_tokens, m.reliability), reverse=True)
-        return candidates[0]
+    def availability(self) -> str:
+        """Honest availability string derived from the real environment."""
+        return ("GEMINI_API_KEY: SET" if self._registry["gemini"].is_available
+                else "GEMINI_API_KEY: MISSING — Gemini unavailable")

@@ -86,13 +86,8 @@ from zerion.cognitive_os.capability import (
 )
 from zerion.cognitive_os.capability_sandbox import CapabilitySandbox
 from zerion.cognitive_os.capability_genesis import CapabilityGenesis
-from zerion.cognitive_os.gguf_discovery import LocalModelDiscovery
 from zerion.cognitive_os.performance_ledger import PerformanceLedger
-from zerion.cognitive_os.provider_adapters import (
-    LegacyGeminiAdapter,
-    LegacyGGUFAdapter,
-    LegacyOpenAIAdapter,
-)
+from zerion.cognitive_os.provider_adapters import LegacyGeminiAdapter
 from zerion.cognitive_os.provider_health import ProviderHealthTracker
 from zerion.cognitive_os.cognitive_router import CognitiveRouter
 from zerion.cognitive_os.router_types import (
@@ -307,7 +302,6 @@ class CognitiveRuntime:
                  cpu_degraded_threshold: float = 60.0,
                  stale_event_window_s: float = 60.0,
                  experiment_permissions: Optional[ExperimentPermissions] = None,
-                 models_dir: Optional[str] = None,
                  security: Optional[Any] = None,
                  identity: Optional[Any] = None,
                  self_model: Optional[Any] = None,
@@ -403,30 +397,25 @@ class CognitiveRuntime:
             permission_policy=PermissionPolicy(),
         )
 
-        # Slice 6: cognitive routing. The runtime does not care which provider
-        # supplies its cognitive substrate. Provider health is proven by real
-        # call outcomes, historical performance comes from the persistent
-        # outcome ledger (cold start = INSUFFICIENT_DATA, never invented), and
-        # local GGUF discovery is real file scanning with safety checks. The
-        # router emits its lifecycle on the same single bus.
+        # Slice 6: cognitive routing. Gemini is the only provider substrate.
+        # Provider health is proven by real call outcomes, historical
+        # performance comes from the persistent outcome ledger (cold start =
+        # INSUFFICIENT_DATA, never invented). The router emits its lifecycle
+        # on the same single bus.
         self.provider_health = ProviderHealthTracker()
         self.performance_ledger = PerformanceLedger(
             db_path=str(self.data_dir / "performance_ledger.db"), strict_load=True)
-        self.local_models = LocalModelDiscovery(
-            models_dir=models_dir or str(self.data_dir / "models"))
         self.cognitive_router = CognitiveRouter(
             health=self.provider_health,
             ledger=self.performance_ledger,
-            local_models=self.local_models,
             emit=self._emit_routing_event,
         )
-        # OpenAI: REMOVED — Gemini is the sole authoritative provider.
-        # GGUF: REMOVED — local model is not used.
+        # Gemini is the ONLY provider. No OpenAI, no local GGUF, no offline
+        # fallback — if Gemini fails, the failure is reported honestly.
         self.cognitive_router.register_provider(
             LegacyGeminiAdapter(),
             configured=bool(os.environ.get("GEMINI_API_KEY", "")),
             integration_implemented=True)  # real Gemini API integration
-        # LegacyGGUFAdapter intentionally NOT registered — local model removed.
 
         # ZERION runtime identity & tool layer. The local model is only the
         # reasoning engine; these own the identity/context, the executable
@@ -1883,9 +1872,8 @@ class CognitiveRuntime:
     async def execute_task(self, task: Task, prompt: str,
                            mode: RoutingMode = RoutingMode.AUTO,
                            selection: Optional[ModelSelection] = None) -> CognitiveResult:
-        """THE canonical live conversation path (CLI / UI / voice all route
-        here). ZERION owns the loop; the local model (Qwen GGUF) is only the
-        reasoning engine underneath:
+        """THE canonical live conversation path (CLI / UI all route
+        here). ZERION owns the loop; Gemini is the reasoning engine underneath:
 
             USER INPUT -> ZERION CONTEXT (identity/constitution/cognition/
             memory/capabilities/tools) -> intent + goal analysis ->

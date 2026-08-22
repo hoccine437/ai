@@ -276,15 +276,24 @@ def lookup_helper():
     # Remove cloud access. System continues functioning using local resources.
     # --------------------------------------------------------------------------
     async def test_acceptance_09_offline_degradation(self):
+        """There is NO offline/local-model mode. With the provider genuinely
+        unavailable the runtime degrades HONESTLY: structured failure, no
+        fabricated output — and the engine itself stays alive."""
         await self.engine.start()
         try:
-            self.engine.offline.set_offline_mode(True)
-            self.assertTrue(self.engine.offline.is_offline)
-
-            # Execute task locally
-            res = await self.engine.offline.execute_task_locally("Synthesize local sort strategy")
-            self.assertTrue(res["success"])
-            self.assertIn("deterministic_local", res["model_id"])
+            # Real recorded failures trip the Gemini circuit breaker.
+            for _ in range(4):
+                self.engine.cognitive_runtime.cognitive_router.health.record_failure(
+                    "gemini", timeout=True, error="timeout")
+            from zerion.cognitive_os.router_types import Task, TaskType
+            task = Task(type=TaskType.CONVERSATION,
+                        description="Synthesize sort strategy",
+                        required_capabilities=set())
+            res = await self.engine.cognitive_runtime.execute_task(task, "sort")
+            self.assertIsNone(res.output)          # never fabricated
+            self.assertTrue(res.errors)            # failure is reported
+            # The runtime stays alive and reports honestly.
+            self.assertTrue(self.engine._running)
         finally:
             await self.engine.stop()
 

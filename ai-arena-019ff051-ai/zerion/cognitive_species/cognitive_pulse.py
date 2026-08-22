@@ -77,7 +77,8 @@ class CognitiveSpeciesRuntime:
         self.goal_field = GoalField(db_path=f"{data_dir}/goal_field.db")
         self.hypothesis_engine = HypothesisCompetitionEngine()
         self.bottleneck_detector = BottleneckDetector()
-        self.router = CognitiveRouter(models_dir=f"{data_dir}/../models")
+        # Gemini-only router: no local models directory exists.
+        self.router = CognitiveRouter()
         self._pulse_count = 0
 
     async def execute_pulse_cycle(self, context: Dict[str, Any]) -> SpeciesCycleTrace:

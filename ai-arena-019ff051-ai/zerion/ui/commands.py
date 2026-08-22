@@ -32,12 +32,9 @@ class SecurityDeniedError(ValueError):
 # just because no entry exists.
 _COMMAND_PERMISSIONS: Dict[str, PermissionLevel] = {
     # User-visible introspection + workspace-scoped actions (default-granted).
-    "START_LISTENING": PermissionLevel.INTERNAL_EXECUTE,
-    "STOP_LISTENING": PermissionLevel.INTERNAL_EXECUTE,
-    "CANCEL_OPERATION": PermissionLevel.INTERNAL_EXECUTE,
+    # Microphone/voice commands are REMOVED: Zerion is text-input only.
     "PAUSE_PULSE": PermissionLevel.INTERNAL_EXECUTE,
     "RESUME_PULSE": PermissionLevel.INTERNAL_EXECUTE,
-    "SET_OFFLINE_MODE": PermissionLevel.INTERNAL_EXECUTE,
     "SELECT_MODEL": PermissionLevel.WORKSPACE_WRITE,
     "CREATE_GOAL": PermissionLevel.WORKSPACE_WRITE,
     "PAUSE_GOAL": PermissionLevel.WORKSPACE_WRITE,
@@ -135,22 +132,6 @@ class CommandAPI:
 
     # -- commands ----------------------------------------------------------
 
-    async def _cmd_start_listening(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        pipeline = self.engine.voice_pipeline
-        await pipeline.start_listening()
-        return {"voice_state": pipeline.state_machine.state.value}
-
-    async def _cmd_stop_listening(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        pipeline = self.engine.voice_pipeline
-        await pipeline.stop_listening()
-        return {"voice_state": pipeline.state_machine.state.value}
-
-    async def _cmd_cancel_operation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        pipeline = self.engine.voice_pipeline
-        await pipeline.interrupt_speech()
-        return {"voice_state": pipeline.state_machine.state.value,
-                "interrupted": True}
-
     async def _cmd_pause_pulse(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         pulse = self.engine.cognitive_runtime.cognitive_pulse
         await pulse.pause()
@@ -161,13 +142,6 @@ class CommandAPI:
         await pulse.resume()
         return {"pulse_state": pulse.state.value}
 
-    async def _cmd_set_offline_mode(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        allowed = {"OFFLINE_ONLY", "ONLINE_ALLOWED", "ONLINE_PREFERRED", "AUTO"}
-        mode = self._require_enum(payload, "mode", allowed)
-        pulse = self.engine.cognitive_runtime.cognitive_pulse
-        pulse.set_offline_mode(mode)
-        return {"offline_mode": mode, "pulse_state": pulse.state.value}
-
     async def _cmd_select_model(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         provider = self._require_text(payload, "provider", max_len=64)
         model = self._require_text(payload, "model", max_len=128)
@@ -176,17 +150,10 @@ class CommandAPI:
         if provider not in router.providers():
             raise CommandValidationError(
                 f"unknown provider '{provider}' — registered: {router.providers()}")
-        # Only local models can be actively loaded/unloaded; remote providers
-        # are selected per-task by the router (never "loaded").
         info = router._models.get(provider, {}).get(model)
         if info is None:
             raise CommandValidationError(
                 f"model '{model}' not registered under provider '{provider}'")
-        registry = getattr(self.engine, "local_model_registry", None)
-        if provider == "local_gguf" and registry is not None:
-            load = registry.load(model)
-            return {"provider": provider, "model": model, "load": load,
-                    "selection_reason": registry.selection_reason()}
         return {"provider": provider, "model": model,
                 "note": "provider selected per-task by CognitiveRouter"}
 
@@ -221,7 +188,7 @@ class CommandAPI:
             default="REASONING")
         mode = self._require_enum(
             payload, "mode",
-            {"OFFLINE_ONLY", "ONLINE_ALLOWED", "ONLINE_PREFERRED", "AUTO"},
+            {"ONLINE_ALLOWED", "ONLINE_PREFERRED", "AUTO"},
             default="AUTO")
         from zerion.cognitive_os.router_types import RoutingMode, Task, TaskType
         runtime = self.engine.cognitive_runtime
@@ -234,7 +201,6 @@ class CommandAPI:
             stakes=0.2,
             goal_relevance=0.5,
             required_capabilities=set(),
-            offline_required=(RoutingMode(mode) == RoutingMode.OFFLINE_ONLY),
             verification_required=False,
             metadata={"source": "command_api"},
         )

@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """
-ZERION-X — GENESIS & Ω Intelligence Foundry Main Entrypoint
+ZERION — LEGACY ENTRY COMPATIBILITY WRAPPER.
+
+main.py no longer starts its own runtime. The MASTER ENTRYPOINT of Zerion is
+`main2.py` (the central orchestrator); this wrapper only forwards to it so
+existing launchers (`sh start.sh`, `python main.py ...`, package.json scripts)
+keep working. There is exactly ONE bootstrap path: main2.py.
 """
 
 import os
-from pathlib import Path
+import sys
 
 
 def load_dotenv():
-    """Loads environment variables from .env file if present (zero external dependencies)."""
+    """Kept for launcher compatibility — main2 performs the canonical load."""
+    from pathlib import Path
+
     for env_file in [Path(".env"), Path(__file__).parent / ".env", Path.home() / ".env"]:
         if env_file.exists():
             try:
@@ -27,8 +34,6 @@ def load_dotenv():
 
 if __name__ == "__main__":
     load_dotenv()
-    # Microphone INPUT is permanently disabled.
-    # Voice OUTPUT (TTS) is allowed; microphone capture is NOT.
-    os.environ["ZERION_DISABLE_MIC"] = "1"
-    from zerion.cli import main
-    main()
+    # Microphone has been REMOVED from Zerion entirely — nothing to disable.
+    from main2 import run
+    sys.exit(run())

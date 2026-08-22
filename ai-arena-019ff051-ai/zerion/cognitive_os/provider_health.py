@@ -154,10 +154,10 @@ class ProviderHealthTracker:
 
     def reset(self, provider: str) -> ProviderHealth:
         """Circuit-breaker reset: an operator acknowledges the environment was
-        fixed (e.g. a GGUF backend was installed) and clears failure history
-        so the provider can be routed again. Never fabricates success — the
-        provider returns to UNKNOWN (configured, unproven) until a real call
-        succeeds."""
+        fixed (e.g. network/Gemini connectivity restored) and clears failure
+        history so the provider can be routed again. Never fabricates success
+        — the provider returns to UNKNOWN (configured, unproven) until a real
+        call succeeds."""
         h = self.get(provider)
         h.total_calls = 0
         h.successes = 0

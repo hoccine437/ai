@@ -83,12 +83,18 @@ class TestRuntimeSmoke(unittest.TestCase):
         finally:
             shutil.rmtree(d)
 
-    def test_08_microphone_disabled(self):
-        """ZERION_DISABLE_MIC must be set in main.py."""
-        with open("main.py", "r") as f:
-            content = f.read()
-        self.assertIn("ZERION_DISABLE_MIC", content,
-                      "main.py must set ZERION_DISABLE_MIC=1")
+    def test_08_microphone_removed(self):
+        """The microphone is REMOVED from Zerion: main.py must not contain any
+        mic/audio-input bootstrap, and main2.py must never start one."""
+        for entry in ("main.py", "main2.py"):
+            with open(entry, "r") as f:
+                content = f.read()
+            for banned in ("ZERION_ENABLE_MIC", "PyAudio", "sounddevice",
+                           "speech_recognition", "start_microphone"):
+                self.assertNotIn(banned, content,
+                                 f"{entry} must not reference {banned}")
+            if entry == "main.py":
+                self.assertIn("Microphone has been REMOVED", content)
 
     def test_09_intelligence_pipeline_exists(self):
         """CognitiveEngine must be importable and constructable."""

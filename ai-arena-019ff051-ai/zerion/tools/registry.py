@@ -960,21 +960,14 @@ class ToolRegistry:
             return _err("voice_speak", "❌ TTS not available (termux-tts-speak not found)")
         r("voice_speak", "voice", "Speak text using Termux TTS engine", _voice_speak)
 
-        def _voice_listen(a):
-            if shutil.which("termux-speech-to-text"):
-                out = subprocess.getoutput("termux-speech-to-text 2>&1 | head -1")
-                return _ok("voice_listen", f"🎤 Heard: {out[:500]}")
-            return _err("voice_listen", "❌ STT not available (termux-speech-to-text not found)")
-        r("voice_listen", "voice", "Listen for speech input using Termux STT", _voice_listen)
+        # Microphone input removed from Zerion: no STT/"listen" tool exists.
 
         def _audio_info(a):
             tts = shutil.which("termux-tts-speak")
-            stt = shutil.which("termux-speech-to-text")
             return _ok("audio_info",
                 f"Audio System Status:\n"
                 f"  TTS (text-to-speech): {'✅ available' if tts else '❌ not found'}\n"
-                f"  STT (speech-to-text): {'✅ available' if stt else '❌ not found'}\n"
-                f"  Microphone env: {os.environ.get('ZERION_DISABLE_MIC', 'not set')}")
+                f"  Microphone: 🚫 removed (Zerion is text-input only)")
         r("audio_info", "voice", "Check audio system capabilities (TTS/STT availability)", _audio_info)
 
         def _audio_volume(a):
@@ -990,22 +983,11 @@ class ToolRegistry:
             return _ok("audio_vibrate", f"📳 Vibration triggered ({duration}ms): {out[:100]}")
         r("audio_vibrate", "voice", "Trigger device vibration for N milliseconds", _audio_vibrate)
 
-        def _audio_record(a):
-            if shutil.which("termux-microphone-record"):
-                subprocess.getoutput("termux-microphone-record -f /tmp/zerion_recording.ogg -l 10")
-                return _ok("audio_record", "🎤 Recording started (10s) -> /tmp/zerion_recording.ogg")
-            return _err("audio_record", "❌ Microphone recording not available")
-        r("audio_record", "voice", "Record audio from microphone (10 seconds)", _audio_record)
-
-        def _audio_stop(a):
-            subprocess.getoutput("termux-microphone-record -c")
-            return _ok("audio_stop", "⏹️ Recording stopped")
-        r("audio_stop", "voice", "Stop any active audio recording", _audio_stop)
-
         def _audio_list_devices(a):
             out = subprocess.getoutput("termux-audio-info 2>/dev/null | head -20")
             return _ok("audio_list_devices", out[:1000] or "Audio device info unavailable")
-        r("audio_list_devices", "voice", "List available audio input/output devices", _audio_list_devices)
+
+        r("audio_list_devices", "voice", "List available audio output devices (no mic capture)", _audio_list_devices)
 
         def _audio_set_volume(a):
             parts = a.split() if a else []
@@ -1047,6 +1029,46 @@ class ToolRegistry:
                 return _ok("dev_battery", f"🔋 Battery:\n{out[:500]}")
             return _err("dev_battery", "❌ Battery info unavailable")
         r("dev_battery", "device", "Get battery status (percentage, charging, temperature)", _dev_battery)
+
+        def _dev_brightness(a):
+            arg = a.strip()
+            if arg and arg.isdigit():
+                level = max(0, min(255, int(arg)))
+                out = subprocess.getoutput(f"termux-brightness {level} 2>&1")
+                if "not found" in out.lower() or "unknown" in out.lower():
+                    return _err("dev_brightness", f"❌ Brightness control unavailable: {out[:120]}")
+                return _ok("dev_brightness", f"☀️ Screen brightness set to {level}/255")
+            cur = subprocess.getoutput("settings get system screen_brightness 2>/dev/null")
+            if cur.strip().isdigit():
+                return _ok("dev_brightness", f"☀️ Current brightness: {cur.strip()}/255 (pass 0-255 to set)")
+            return _err("dev_brightness", "❌ Screen brightness unavailable on this device")
+        r("dev_brightness", "device", "Get or set screen brightness (0-255, Termux API)", _dev_brightness)
+
+        def _dev_media_control(a):
+            action = a.strip().lower() or "info"
+            if action not in ("play", "pause", "stop", "info"):
+                return _err("dev_media_control", "❌ action must be play|pause|stop|info")
+            if action == "info":
+                out = subprocess.getoutput("termux-media-session info 2>/dev/null || termux-media-player info 2>/dev/null")
+                return _ok("dev_media_control", out[:500] or "No active media session")
+            bin_name = "termux-media-session" if shutil.which("termux-media-session") else "termux-media-player"
+            if not shutil.which(bin_name):
+                return _err("dev_media_control", "❌ Media control unavailable (no Termux media binary)")
+            out = subprocess.getoutput(f"{bin_name} {action} 2>&1")
+            return _ok("dev_media_control", f"🎵 Media {action}: {out[:200]}")
+        r("dev_media_control", "device", "Control device media playback (play/pause/stop/info)", _dev_media_control)
+
+        def _file_temp(a):
+            suffix = a.strip()[:16]
+            import tempfile as _tf
+            try:
+                fd, path = _tf.mkstemp(suffix=f".{suffix}" if suffix else ".txt",
+                                       prefix="zerion_")
+                os.close(fd)
+                return _ok("file_temp", f"📄 Temp file created: {path}")
+            except OSError as e:
+                return _err("file_temp", f"❌ Temp file failed: {e}")
+        r("file_temp", "files", "Create a uniquely-named temporary file and return its path", _file_temp)
 
         def _dev_wifi(a):
             if shutil.which("termux-wifi-connectioninfo"):
