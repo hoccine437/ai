@@ -160,7 +160,8 @@ class ZerionToolRouter:
 
     def _register_defaults(self) -> None:
         self._register(ZerionTool(
-            "greeting", "friendly greeting when the user says hello/hi",
+            "greeting", "report current time period and active objectives "
+            "(context data for composing greetings - not a reply)",
             self._tool_greeting))
         self._register(ZerionTool(
             "identity", "report who ZERION is (identity, mission, state)",
@@ -216,11 +217,10 @@ class ZerionToolRouter:
         low = (user_text or "").strip().lower()
         if not low:
             return None
-        # Word-boundary greeting detection: 'hi' must not match inside 'this'
-        _greet_words = {"hello", "hi", "hey", "greetings", "howdy", "sup", "yo"}
-        words = set(low.split())
-        if words & _greet_words and len(words) <= 2:
-            return "greeting"
+        # NOTE: greetings are CONVERSATION — they must go through Gemini
+        # (architecture rule: no canned/hardcoded conversational replies).
+        # The greeting tool stays registered as a real data tool (clock +
+        # objectives introspection) but is never auto-selected for chat.
         # Check recall before store — 'what is my name' must not match store
         if _MEMORY_RECALL_RE.match(low):
             return "memory_recall"
@@ -314,33 +314,27 @@ class ZerionToolRouter:
     # -- real local tools ---------------------------------------------------
 
     def _tool_greeting(self, _arg: str, _router) -> ToolResult:
-        # Context-aware greeting: check time of day and system state
+        # Real data only: current time period and live runtime state.
+        # NEVER fabricates a conversational reply (that is Gemini's job).
         from datetime import datetime
         hour = datetime.now().hour
         if hour < 6:
-            time_greeting = "Good night"
+            period = "night"
         elif hour < 12:
-            time_greeting = "Good morning"
+            period = "morning"
         elif hour < 18:
-            time_greeting = "Good afternoon"
+            period = "afternoon"
         else:
-            time_greeting = "Good evening"
-        # Check if there are active goals or recent activity
-        status_hint = ""
+            period = "evening"
         try:
             obj = getattr(_router.runtime, "objectives", None)
-            if obj:
-                active = obj.list_active_objectives()
-                if active:
-                    status_hint = (f" I see you have {len(active)} active "
-                                   f"objective(s). Ready to continue.")
+            active = len(obj.list_active_objectives()) if obj else 0
         except Exception:  # noqa: BLE001
-            pass
+            active = 0
         return ToolResult(
             ok=True, tool="greeting",
-            output=f"{time_greeting}! I am ZERION, your autonomous cognitive "
-                   f"assistant (Gemini-powered when the Gemini API is "
-                   f"available).{status_hint} How can I help you today?")
+            output=f"time_period={period} local_hour={hour} "
+                   f"active_objectives={active}")
 
     def _tool_identity(self, _arg: str, _router) -> ToolResult:
         try:
