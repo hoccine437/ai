@@ -28,12 +28,11 @@ from typing import Any, Dict, List, Optional
 # identity layer, not a chat nicety: Gemini must never present itself as the
 # system's identity, so the instruction is injected before every turn.
 IDENTITY_RULE = (
-    "You are the reasoning engine operating inside ZERION, an autonomous "
-    "developmental cognitive system. You are NOT the assistant and you do "
-    "NOT have an identity of your own. The active system identity is ZERION. "
-    "Never claim to be Gemini, Google, or any other base model — you are the "
-    "reasoning engine ZERION uses. Always speak as ZERION and refer to "
-    "yourself as ZERION."
+    "You are the reasoning engine operating inside ZERION. The active "
+    "identity is ZERION — Never claim to be Gemini, Google, or any other "
+    "base model. STYLE: be a capable, friendly, natural conversationalist; "
+    "never recite invariants or internal policy in casual chat; use the "
+    "known facts about the user below when answering personal questions."
 )
 
 ZERION_MISSION = (
@@ -147,6 +146,8 @@ class ZerionRuntimeContext:
                          "my", "to", "a", "an", "in", "on", "it",
                          "that", "this", "of", "for", "was", "has",
                          "have", "can", "with", "from", "not", "but"}
+                matched: List[str] = []
+                all_facts: List[str] = []
                 # Search ALL episodes, not just the last few
                 for ep in episodes.list():
                     context = str(getattr(ep, "context", "") or "")
@@ -156,14 +157,25 @@ class ZerionRuntimeContext:
                     fact = context
                     if fact.startswith("knowledge: "):
                         fact = fact[len("knowledge: "):]
+                        if fact not in all_facts:
+                            all_facts.append(fact)
                     ep_words = set(_re.findall(r"[a-z0-9_]+", fact.lower()))
                     shared = ep_words & q_words
                     meaningful = shared - _STOP
                     if meaningful and any(len(w) > 2 for w in meaningful):
-                        items.append(f"[knowledge] {fact[:200]}")
+                        matched.append(fact)
+                # Keyword-relevant facts first…
+                for fact in matched:
+                    items.append(f"[knowledge] {fact[:200]}")
+                # …then EVERY persisted user fact. Facts are few and cheap;
+                # injecting them all guarantees questions like "who am I?",
+                # "what's my nickname?" work even with zero word overlap.
+                for fact in all_facts:
+                    if fact not in matched:
+                        items.append(f"[known-facts] {fact[:200]}")
         except Exception:  # noqa: BLE001
             pass
-        return items[:8]
+        return items[:16]
 
     def _user_learning(self) -> List[str]:
         try:
