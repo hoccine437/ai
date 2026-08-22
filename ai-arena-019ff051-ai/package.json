@@ -1,0 +1,20 @@
+{
+  "name": "zerion-x-ai",
+  "version": "1.0.0",
+  "description": "ZERION-X ASCENDANT — Autonomous cognitive system with phone UI",
+  "private": false,
+  "scripts": {
+    "install:python": "python3 -m pip install -q -r requirements.txt || echo 'WARN: optional deps unavailable; core runtime is pure stdlib'",
+    "postinstall": "npm run install:python",
+    "dev": "sh ./start.sh",
+    "start": "sh ./start.sh",
+    "ui": "python3 main.py --ui",
+    "backend": "python3 main.py --ui",
+    "status": "python3 main.py --status",
+    "cognitive-benchmark": "python3 main.py --cognitive-benchmark",
+    "test": "python3 -m pytest tests/ -x -q --tb=line"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

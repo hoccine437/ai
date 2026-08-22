@@ -1,0 +1,8 @@
+# ZERION-X — Development, Testing, and Linting Dependencies (pinned 2026-08-13)
+# Every pin supports Python 3.9 (project floor).
+pytest==8.3.5
+pytest-asyncio==1.2.0
+ruff==0.16.3
+mypy==1.19.1
+setuptools==82.0.1
+wheel==0.48.0

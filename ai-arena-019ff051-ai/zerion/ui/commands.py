@@ -1,0 +1,216 @@
+"""
+Command API — Slice 10.
+
+The ONLY way the UI can request actions from the runtime. Every command is:
+1. authorized through the canonical SecurityBoundary (a denial blocks the
+   command before any handler runs — never silently bypassed),
+2. validated (unknown commands rejected, payload schema enforced),
+3. executed through runtime-controlled interfaces (CognitiveRuntime goal APIs,
+   CognitivePulse lifecycle, CognitiveRouter, voice pipeline state machine),
+4. never allowed to bypass permissions, the SelfModificationGate, tool
+   security or system-control policy — no command here touches the gate or
+   mutates cognitive internals directly.
+
+All commands return a structured result: {command, status, result, error}.
+"""
+
+from typing import Any, Dict, List, Optional
+
+from zerion.runtime.security import PermissionLevel
+
+
+class CommandValidationError(ValueError):
+    pass
+
+
+class SecurityDeniedError(ValueError):
+    """Raised when the canonical SecurityBoundary denies a command."""
+
+
+# Command -> required permission. Commands not listed here are treated as
+# SYSTEM_MUTATE (denied by default): unknown/unsafe commands can never run
+# just because no entry exists.
+_COMMAND_PERMISSIONS: Dict[str, PermissionLevel] = {
+    # User-visible introspection + workspace-scoped actions (default-granted).
+    # Microphone/voice commands are REMOVED: Zerion is text-input only.
+    "PAUSE_PULSE": PermissionLevel.INTERNAL_EXECUTE,
+    "RESUME_PULSE": PermissionLevel.INTERNAL_EXECUTE,
+    "SELECT_MODEL": PermissionLevel.WORKSPACE_WRITE,
+    "CREATE_GOAL": PermissionLevel.WORKSPACE_WRITE,
+    "PAUSE_GOAL": PermissionLevel.WORKSPACE_WRITE,
+    "RESUME_GOAL": PermissionLevel.WORKSPACE_WRITE,
+    "RUN_TASK": PermissionLevel.WORKSPACE_WRITE,
+}
+
+
+class CommandAPI:
+    def __init__(self, engine: Any):
+        self.engine = engine
+
+    # -- authorization -----------------------------------------------------
+
+    def _authorize(self, command: str) -> None:
+        """Gate every command through the canonical SecurityBoundary.
+
+        Raises SecurityDeniedError when the boundary denies; the handler is
+        never invoked. A missing boundary (should not happen on the engine)
+        denies by default — fail closed, never open."""
+        required = _COMMAND_PERMISSIONS.get(command.upper())
+        if required is None:
+            raise SecurityDeniedError(
+                f"command '{command}' requires SYSTEM_MUTATE authorization "
+                f"and is denied by default")
+        boundary = getattr(self.engine, "security", None)
+        if boundary is None:
+            raise SecurityDeniedError(
+                "no security boundary wired — commands fail closed")
+        if not boundary.authorize(
+                action=f"command_{command.lower()}",
+                target=f"command:{command}",
+                required_permission=required,
+                caller="command_api"):
+            raise SecurityDeniedError(
+                f"command '{command}' denied by security boundary "
+                f"(requires {required.value})")
+
+    # -- registry ----------------------------------------------------------
+
+    async def execute(self, command: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        payload = payload or {}
+        handler = getattr(self, f"_cmd_{command.lower()}", None)
+        if handler is None:
+            return {
+                "command": command, "status": "VALIDATION_ERROR",
+                "error": f"unknown command '{command}' — allowed: "
+                         + ", ".join(sorted(self.available_commands()))}
+        try:
+            self._authorize(command)
+        except SecurityDeniedError as e:
+            return {"command": command, "status": "SECURITY_DENIED",
+                    "error": str(e)}
+        try:
+            result = await handler(payload)
+            return {"command": command, "status": "OK", "result": result}
+        except CommandValidationError as e:
+            return {"command": command, "status": "VALIDATION_ERROR",
+                    "error": str(e)}
+        except Exception as e:  # noqa: BLE001 — structured errors only
+            return {"command": command, "status": "ERROR",
+                    "error": f"{type(e).__name__}: {str(e)[:300]}"}
+
+    def available_commands(self) -> List[str]:
+        return [name[5:].upper() for name in dir(self) if name.startswith("_cmd_")]
+
+    # -- validators --------------------------------------------------------
+
+    @staticmethod
+    def _require_text(payload: Dict[str, Any], key: str, min_len: int = 1,
+                      max_len: int = 500) -> str:
+        val = payload.get(key)
+        if not isinstance(val, str) or not val.strip():
+            raise CommandValidationError(f"'{key}' must be a non-empty string")
+        val = val.strip()
+        if len(val) < min_len:
+            raise CommandValidationError(
+                f"'{key}' must be at least {min_len} characters")
+        if len(val) > max_len:
+            raise CommandValidationError(
+                f"'{key}' must be at most {max_len} characters")
+        return val
+
+    @staticmethod
+    def _require_enum(payload: Dict[str, Any], key: str,
+                      allowed: set, default: Optional[str] = None) -> str:
+        val = payload.get(key, default)
+        if val is None:
+            raise CommandValidationError(f"'{key}' is required")
+        val = str(val).upper()
+        if val not in allowed:
+            raise CommandValidationError(
+                f"'{key}' must be one of {sorted(allowed)}, got '{val}'")
+        return val
+
+    # -- commands ----------------------------------------------------------
+
+    async def _cmd_pause_pulse(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        pulse = self.engine.cognitive_runtime.cognitive_pulse
+        await pulse.pause()
+        return {"pulse_state": pulse.state.value}
+
+    async def _cmd_resume_pulse(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        pulse = self.engine.cognitive_runtime.cognitive_pulse
+        await pulse.resume()
+        return {"pulse_state": pulse.state.value}
+
+    async def _cmd_select_model(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        provider = self._require_text(payload, "provider", max_len=64)
+        model = self._require_text(payload, "model", max_len=128)
+        runtime = self.engine.cognitive_runtime
+        router = runtime.cognitive_router
+        if provider not in router.providers():
+            raise CommandValidationError(
+                f"unknown provider '{provider}' — registered: {router.providers()}")
+        info = router._models.get(provider, {}).get(model)
+        if info is None:
+            raise CommandValidationError(
+                f"model '{model}' not registered under provider '{provider}'")
+        return {"provider": provider, "model": model,
+                "note": "provider selected per-task by CognitiveRouter"}
+
+    async def _cmd_create_goal(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        objective = self._require_text(payload, "objective", max_len=300)
+        purpose = payload.get("purpose") or ""
+        runtime = self.engine.cognitive_runtime
+        goal = await runtime.create_goal(objective, purpose=purpose)
+        return {"goal_id": goal.objective_id, "title": goal.title,
+                "status": getattr(goal.status, "value", str(goal.status))}
+
+    async def _cmd_pause_goal(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        goal_id = self._require_text(payload, "goal_id", max_len=128)
+        runtime = self.engine.cognitive_runtime
+        goal = await runtime.pause_goal(goal_id)
+        return {"goal_id": goal.objective_id,
+                "status": getattr(goal.status, "value", str(goal.status))}
+
+    async def _cmd_resume_goal(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        goal_id = self._require_text(payload, "goal_id", max_len=128)
+        runtime = self.engine.cognitive_runtime
+        goal = await runtime.resume_goal(goal_id)
+        return {"goal_id": goal.objective_id,
+                "status": getattr(goal.status, "value", str(goal.status))}
+
+    async def _cmd_run_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        prompt = self._require_text(payload, "prompt", max_len=2000)
+        task_type = self._require_enum(
+            payload, "task_type",
+            {"REASONING", "CODING", "RETRIEVAL", "CONVERSATION", "PLANNING",
+             "TOOL_USE", "ANALYSIS", "ARCHITECTURE", "OTHER"},
+            default="REASONING")
+        mode = self._require_enum(
+            payload, "mode",
+            {"ONLINE_ALLOWED", "ONLINE_PREFERRED", "AUTO"},
+            default="AUTO")
+        from zerion.cognitive_os.router_types import RoutingMode, Task, TaskType
+        runtime = self.engine.cognitive_runtime
+        task = Task(
+            type=TaskType(task_type),
+            description=prompt[:200],
+            difficulty=0.4,
+            uncertainty=0.4,
+            novelty=0.4,
+            stakes=0.2,
+            goal_relevance=0.5,
+            required_capabilities=set(),
+            verification_required=False,
+            metadata={"source": "command_api"},
+        )
+        result = await runtime.execute_task(task, prompt, mode=RoutingMode(mode))
+        return {
+            "task_id": task.task_id,
+            "status": result.status.value,
+            "provider": result.provider,
+            "model": result.model,
+            "output": result.output,
+            "errors": list(result.errors or []),
+            "latency_ms": result.latency_ms,
+        }
