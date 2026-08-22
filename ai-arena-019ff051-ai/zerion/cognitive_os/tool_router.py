@@ -224,6 +224,9 @@ class ZerionToolRouter:
         # Check recall before store — 'what is my name' must not match store
         if _MEMORY_RECALL_RE.match(low):
             return "memory_recall"
+        # Contextual recall: "what preference did I ask you to remember?"
+        if re.search(r"\bwhat\b.*\b(remember|told|tell|said|ask)\b", low):
+            return "memory_recall"
         # Specific tool checks BEFORE broad store patterns — prevents
         # 'what can you do?' from matching the broad 'X can Y' store pattern
         if any(q in low for q in ("who are you", "who are u", "what are you",
@@ -536,7 +539,12 @@ class ZerionToolRouter:
         if episode_store is None:
             return None
         norm = key.strip().lower().rstrip("?!. ")
-        singular = norm[:-1] if norm.endswith("s") else norm
+        variants = {norm}
+        # Loose morphological matches: plural/singular and common derivations
+        # ("preferences" -> "prefer", "nickname" stays "nickname").
+        for suf in ("s", "es", "ion", "ions", "ence", "ences", "ing", "ed"):
+            if norm.endswith(suf) and len(norm) - len(suf) >= 4:
+                variants.add(norm[: len(norm) - len(suf)])
         for ep in reversed(episode_store.list()[-100:]):
             ctx = str(getattr(ep, "context", "") or "")
             if not ctx.startswith("knowledge: "):
@@ -546,7 +554,8 @@ class ZerionToolRouter:
                 continue
             k, _, v = fact.partition(":")
             k_norm = k.strip().lower()
-            if k_norm == norm or k_norm == singular:
+            if any(k_norm == v2 or k_norm.startswith(v2)
+                   for v2 in variants if len(v2) >= 4):
                 return v.strip()
         return None
 
@@ -559,13 +568,27 @@ class ZerionToolRouter:
         key_m = re.match(
             r"^(?:what\s+(?:is|are|was)|what's|whats)\s+(?:my|the)\s+(.+?)$",
             qlow)
+        if not key_m:
+            # Contextual phrasings: "what preference did I ask you to
+            # remember?", "what did I tell you about my game?"
+            ctx_m = re.search(
+                r"what\s+(?:\w+\s+){0,3}?my\s+([\w\- ]*?)\b.*"
+                r"(remember|tell|said|ask)", qlow)
+            if not ctx_m:
+                # "what <noun> did I (ask/tell you) ..." -> treat <noun> as key
+                noun_m = re.match(r"^what\s+([\w\-]+)\s+did\b.*"
+                                  r"(remember|tell|said|ask)", qlow)
+                if noun_m:
+                    ctx_m = noun_m
+            if ctx_m:
+                key_m = ctx_m
         if key_m:
             key = key_m.group(1).strip()
             val = self._lookup_key(key)
             if val:
                 return ToolResult(
                     ok=True, tool="memory_recall",
-                    output=f"Your {key} is {val}.")
+                    output=f"You asked me to remember your {key}: {val}.")
             return ToolResult(
                 ok=True, tool="memory_recall",
                 output=(f"I don't have your {key} stored yet — "
@@ -730,11 +753,20 @@ class ZerionToolRouter:
         if self.readiness is not None:
             try:
                 r = self.readiness()
-                provider = r.get("provider") or "gemini"
-                state = r.get("provider_state") or r.get("status") or "UNKNOWN"
-                out = (f"Runtime status: provider={provider}, state={state}. "
-                       f"Input: text only (microphone removed). Gemini is the "
-                       f"only provider.")
+                prov = r.get("provider") or {}
+                if isinstance(prov, dict):
+                    configured = prov.get("configured")
+                    health = prov.get("health", "UNKNOWN")
+                else:
+                    configured, health = None, str(prov)
+                state_txt = (f"provider=gemini health={health}"
+                             + ("" if configured is None else
+                                f" configured={configured}"))
+                rt = r.get("runtime") or {}
+                started = rt.get("started") if isinstance(rt, dict) else None
+                out = (f"Runtime status: {state_txt}; running={started}. "
+                       f"Input: text only (microphone removed). "
+                       f"Gemini is the only provider.")
                 return ToolResult(ok=True, tool="status", output=out)
             except Exception as exc:  # noqa: BLE001
                 return ToolResult(ok=False, tool="status", output="",

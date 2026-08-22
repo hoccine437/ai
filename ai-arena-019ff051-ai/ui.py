@@ -230,8 +230,14 @@ class ZerionUI:
                         task, message, mode=RoutingMode.AUTO)
                     output = getattr(result, "output", None)
                     reply = output or f"[{getattr(result.status, 'value', 'ERROR')}] No response generated."
+                    md = getattr(result, "metadata", {}) or {}
                     res = {"reply": reply,
-                           "status": getattr(result.status, "value", "ERROR")}
+                           "status": getattr(result.status, "value", "ERROR"),
+                           "provider": getattr(result, "provider", ""),
+                           "trace": md.get("trace"),
+                           "agent_used": md.get("agent_used"),
+                           "tool_used": md.get("tool_used"),
+                           "verification": md.get("verification")}
                 except Exception as ex:
                     res = {"reply": f"Error: {type(ex).__name__}: {str(ex)[:200]}",
                            "status": "ERROR"}

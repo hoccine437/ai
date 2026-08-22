@@ -1947,6 +1947,16 @@ class CognitiveRuntime:
                                       decision="local_tool")
             return result
 
+        # 2b) AGENT FAST PATH: operational tasks route through the real
+        #     specialized agents (deterministic selection - no model needed).
+        #     Each agent performs its own real work (live OS queries, file
+        #     operations, math evaluation...) and may execute real tools via
+        #     the tool router. A second specialist verifies when available.
+        agent_fast = await self._maybe_agent_fast_path(
+            task, prompt, mode, t0, goal_id)
+        if agent_fast is not None:
+            return agent_fast
+
         # 3) COGNITIVE PRE-REASONING: Zerion thinks BEFORE responding.
         #    This is NOT just passing input to the LLM — Zerion analyzes
         #    the task, identifies what it understands vs. what it needs
@@ -2076,6 +2086,91 @@ class CognitiveRuntime:
         return result
 
     # -- execute_task helpers -------------------------------------------------
+
+    @staticmethod
+    def _is_operational_task(text: str) -> bool:
+        """True when the user text asks for a real operation that one of the
+        21 specialist agents performs (device/system/file/network/math/...).
+        Pure conversation never detours through the agent path."""
+        low = (text or "").lower()
+        markers = (
+            "battery", "storage", "disk", "process", "network", "wifi",
+            "clipboard", "screenshot", "notification", "uptime", "cpu",
+            "ram", "device info", "system info", "installed apps",
+            "file", "directory", "folder", "move ", "copy ", "delete ",
+            "calculate", "compute", "convert ", "debug", "stack trace",
+            "sql", "database", "docker", "deploy", "refactor", "termux",
+            "android",
+        )
+        return any(m in low for m in markers)
+
+    async def _maybe_agent_fast_path(self, task, prompt, mode, t0, goal_id):
+        """Route operational tasks through the real AgentRegistry.
+
+        USER -> runtime -> selected specialist agent -> real tools ->
+        verification by a second specialist -> response. The full trace is
+        recorded in result.metadata['trace']. Returns None when the task is
+        not operational so the model path proceeds normally."""
+        if getattr(self, "agent_registry", None) is None:
+            return None
+        from zerion.cognitive_os.router_types import (
+            CognitiveResult,
+            ResultStatus,
+        )
+        try:
+            candidates = self.agent_registry.select_best(prompt, top_k=2)
+        except Exception:  # noqa: BLE001 - selection never breaks a turn
+            return None
+        top = candidates[0] if candidates else None
+        if top is None or top.can_handle(prompt) < 0.6:
+            return None
+        if not self._is_operational_task(prompt):
+            return None
+
+        async def _agent_tool_exec(name, arg):
+            return await self.tool_router.execute(name, arg or prompt)
+
+        agent_result = await top.execute(prompt, {}, _agent_tool_exec)
+        verification_note = "not_required"
+        if agent_result.success and len(candidates) > 1:
+            verifier = candidates[1]
+            try:
+                vres = await verifier.execute(
+                    "Verify this result for the task \""
+                    f"{prompt[:120]}\": {agent_result.output[:400]}",
+                    {}, _agent_tool_exec)
+                if vres.success:
+                    verification_note = f"verified_by={verifier.name}"
+                    agent_result.evidence.append(
+                        f"[verification:{verifier.name}] {vres.output[:160]}")
+            except Exception:  # noqa: BLE001
+                verification_note = "verification_unavailable"
+        result = CognitiveResult(
+            task_id=task.task_id,
+            provider="specialist_agent",
+            model=top.agent_id,
+            output=(agent_result.output if agent_result.success else None),
+            status=(ResultStatus.SUCCESS if agent_result.success
+                    else ResultStatus.PROVIDER_UNAVAILABLE),
+            errors=([] if agent_result.success else
+                    [agent_result.reasoning or "agent failed"]),
+            latency_ms=round((time.perf_counter() - t0) * 1000, 3),
+            metadata={
+                "trace": (f"user -> runtime -> agent[{top.name}] -> tools"
+                          f" -> verification({verification_note})"
+                          f" -> response"),
+                "agent_used": top.name,
+                "agent_id": top.agent_id,
+                "agent_confidence": round(top.can_handle(prompt), 3),
+                "verification": verification_note,
+                "agent_evidence": list(agent_result.evidence)[:6],
+            },
+            mode=mode,
+        )
+        self._record_conversation_episode(task, prompt, result)
+        self._finish_execute_task(task, prompt, result, goal_id,
+                                  decision="specialist_agent")
+        return result
 
     def _tool_result_to_cognitive(self, task: Task, tool_result: Any,
                                   mode: RoutingMode, t0: float) -> CognitiveResult:

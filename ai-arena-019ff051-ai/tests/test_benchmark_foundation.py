@@ -361,18 +361,20 @@ class TestIntegrityAndContamination(unittest.TestCase):
             seed=909)
 
     def test_provider_availability_is_honest(self):
-        """Rule 31: unavailable providers are NOT_AVAILABLE, never fabricated."""
+        """Rule 31: Gemini is the ONLY provider; removed providers are
+        reported as REMOVED, never fabricated as available."""
         avail = provider_availability()
-        self.assertIn("deterministic_local", avail)
-        self.assertIn("AVAILABLE", avail["deterministic_local"])
+        self.assertIn("gemini", avail)
+        self.assertTrue(avail["gemini"].startswith("AVAILABLE")
+                        or "NOT_AVAILABLE" in avail["gemini"])
         for provider, status in avail.items():
+            if provider == "openai":
+                # OpenAI was removed from Zerion entirely.
+                self.assertIn("REMOVED", status)
+                continue
             self.assertTrue(status.startswith("AVAILABLE")
-                            or status.startswith("NOT_AVAILABLE"))
-            if provider in ("openai", "gemini", "local_gguf"):
-                self.assertTrue(status.startswith("NOT_AVAILABLE")
-                                or "OPENAI_API_KEY" in status
-                                or "GEMINI_API_KEY" in status
-                                or "GGUF" in status)
+                            or status.startswith("NOT_AVAILABLE"),
+                            f"{provider}: dishonest status {status!r}")
 
 
 class TestAblation(unittest.TestCase):

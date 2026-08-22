@@ -49,10 +49,13 @@ class Agent:
         Override in subclasses for domain-specific matching."""
         task_lower = (task_description or "").lower()
         score = 0.0
-        # Specialization matching — highest signal
-        for spec in self.specializations:
-            if spec.lower() in task_lower:
-                score = max(score, 0.85)
+        # Specialization matching — highest signal; multiple distinct hits
+        # beat a single hit so the best-matching specialist wins ties.
+        matched_specs = sum(
+            1 for spec in self.specializations
+            if spec.lower() in task_lower)
+        if matched_specs:
+            score = max(score, min(0.95, 0.85 + 0.05 * (matched_specs - 1)))
         # Domain keyword matching
         domain_words = set(self.domain.lower().split() + self.name.lower().split())
         task_words = set(task_lower.split())

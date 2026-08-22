@@ -1980,14 +1980,12 @@ def build_default_task_registry(instances_per_family: int = 5) -> List[Benchmark
 
 def provider_availability() -> Dict[str, str]:
     """Rule 31: which providers exist and can run here, honestly."""
+    # Gemini is the ONLY provider - no local-GGUF or OpenAI path exists.
+    gem_key = os.environ.get("GEMINI_API_KEY", "")
     return {
-        "deterministic_local": "AVAILABLE (used for every trial in this run)",
-        "local_gguf": "NOT_AVAILABLE (no GGUF models registered in this "
-                      "environment)",
-        "openai": "AVAILABLE" if os.environ.get("OPENAI_API_KEY")
-        else "NOT_AVAILABLE (no OPENAI_API_KEY configured)",
-        "gemini": "AVAILABLE" if os.environ.get("GEMINI_API_KEY")
-        else "NOT_AVAILABLE (no GEMINI_API_KEY configured)",
+        "gemini": ("AVAILABLE (the only provider)" if gem_key
+                   else "NOT_AVAILABLE (no key configured)"),
+        "openai": "REMOVED - Zerion has no OpenAI integration",
     }
 
 

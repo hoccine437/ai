@@ -58,7 +58,7 @@ class CognitiveEpisode:
     hypotheses: List[str] = field(default_factory=list)
     constraints: List[str] = field(default_factory=list)
     budget: CognitiveBudget = field(default_factory=CognitiveBudget)
-    selected_models: List[str] = field(default_factory=lambda: ["openai_gpt4o_mini", "deterministic_local"])
+    selected_models: List[str] = field(default_factory=lambda: ["gemini-2.5-flash"])
     selected_tools: List[str] = field(default_factory=list)
     selected_strategies: List[str] = field(default_factory=list)
     cognitive_program_topology: str = "DYNAMIC_DIRECT"

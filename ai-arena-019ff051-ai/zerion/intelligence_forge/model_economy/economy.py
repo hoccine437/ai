@@ -45,10 +45,6 @@ class ModelEconomy:
                           "multimodal", "code_synthesis"],
         )}
 
-    def discover_gguf_models(self) -> List[ModelProfile]:
-        """Removed: there are no local GGUF models in Zerion. Always empty."""
-        return []
-
     def select_optimal_model(
         self,
         required_capability: str = "reasoning",

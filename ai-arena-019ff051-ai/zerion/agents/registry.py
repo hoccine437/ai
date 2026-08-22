@@ -666,13 +666,23 @@ class NetworkProbeAgent(Agent):
         task_lower = task.lower()
         diag = ["🌐 NETWORK DIAGNOSTICS\n"]
 
-        # Check online status
+        # Check online status — report what was ACTUALLY probed; a failed
+        # outbound probe is not proof of being offline.
         try:
             import urllib.request
             urllib.request.urlopen("https://1.1.1.1", timeout=3)
-            diag.append("  Status: ONLINE ✅")
-        except Exception:
-            diag.append("  Status: OFFLINE ❌")
+            diag.append("  Outbound HTTPS probe: REACHED ✅ (online)")
+        except Exception as exc:
+            diag.append(f"  Outbound HTTPS probe: FAILED ({type(exc).__name__})")
+            # Local stack can still be healthy — check interface presence
+            # before making any online/offline claim.
+            try:
+                import socket as _s
+                host_ip = _s.gethostbyname(_s.gethostname())
+                diag.append(f"  Local stack: RESOLVED ({host_ip}) — "
+                            f"outbound may be firewalled, not offline")
+            except Exception:
+                diag.append("  Local stack: NO ADDRESS — likely offline")
 
         # DNS check
         if any(w in task_lower for w in ["dns", "resolve", "domain"]):
@@ -723,14 +733,47 @@ class NetworkProbeAgent(Agent):
             except Exception:
                 diag.append("  Latency test failed (offline?)")
 
-        # Network interfaces
-        if any(w in task_lower for w in ["interface", "ip", "address"]):
+        # Network interfaces — enumerate via the OS without relying on the
+        # optional `ip` binary.
+        if any(w in task_lower for w in ["interface", "ip", "address",
+                                          "network"]):
             diag.append("\n📡 INTERFACES:")
+            shown = False
             try:
-                out = subprocess.getoutput("ip addr 2>/dev/null | grep 'inet ' | head -5")
-                diag.append(f"  {out[:300] or 'No interfaces found'}")
+                with open("/proc/net/fib_trie") as f:
+                    seen = set()
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("|--") and "." in line:
+                            addr = line.split("|--")[1].strip()
+                            if (addr.count(".") == 4 and addr != "127.0.0.1"
+                                    and addr not in seen):
+                                seen.add(addr)
+                                diag.append(f"  {addr}")
+                                shown = True
+                                if len(seen) >= 5:
+                                    break
             except Exception:
-                diag.append("  Interface info unavailable")
+                pass
+            try:
+                import socket as _s
+                host_ip = _s.gethostbyname(_s.gethostname())
+                diag.append(f"  hostname resolves to: {host_ip}")
+                shown = True
+            except Exception:
+                pass
+            try:
+                import socket as _s
+                # Real outbound-route check: which address would we use?
+                s = _s.socket(_s.AF_INET, _s.SOCK_DGRAM)
+                s.connect(("10.254.254.254", 1))
+                diag.append(f"  default route source: {s.getsockname()[0]}")
+                s.close()
+                shown = True
+            except Exception:
+                pass
+            if not shown:
+                diag.append("  No network interfaces detectable")
 
         if len(diag) == 1:
             diag.append("  Run with specific query: dns, port, speed, interface")
@@ -861,8 +904,8 @@ class DevOpsPilotAgent(Agent):
         elif any(w in task_lower for w in ["deploy", "publish", "release"]):
             result.append("🚀 DEPLOYMENT")
             result.append("  ZERION deployment options:")
-            result.append("  • Local: python main.py (always works)")
-            result.append("  • UI: python main.py --ui (web interface)")
+            result.append("  • Local: python main2.py (master entrypoint)")
+            result.append("  • UI: python main2.py (serves the web UI + API)")
             result.append("  • Cloud: Use Freebuff hosting integration")
 
         elif any(w in task_lower for w in ["schedule", "cron", "periodic"]):
@@ -1042,7 +1085,8 @@ class MathEngineAgent(Agent):
                         "evaluates formulas, and handles probability.",
             specializations=["math", "calculate", "formula", "equation",
                               "sum", "average", "mean", "probability",
-                              "percent", "ratio", "estimate", "count"],
+                              "percent", "ratio", "estimate", "count",
+                              "*", "+", "-/"],
             tools_allowed=["code_execute", "data_stats", "data_json_parse"])
 
     def _execute_impl(self, task, context, tool_executor):
@@ -1079,17 +1123,20 @@ class MathEngineAgent(Agent):
         # Detect operation
         if any(op in task for op in ["+", "-", "*", "/"]):
             result.append("\n🧮 EXPRESSION DETECTED")
-            # Try to evaluate simple expressions safely
-            simple = re.findall(r'[\d+\-*/().%\s]+', task)
-            for expr in simple:
-                expr = expr.strip()
-                if expr and any(c in expr for c in "+-*/"):
-                    try:
-                        # Safe eval with limited builtins
-                        val = eval(expr, {"__builtins__": {}}, {"math": math})
-                        result.append(f"  {expr} = {val}")
-                    except Exception:
-                        result.append(f"  {expr} = [could not evaluate]")
+            # Evaluate the FULL expression safely: whitelist math functions
+            # (sqrt/pow/abs/log/round) plus numbers/operators/parens.
+            prepared = re.sub(r"(?i)\b(sqrt|pow|abs|log|round)\b",
+                              r"math.\1", task)
+            expr = "".join(re.findall(
+                r"math\.(?:sqrt|pow|abs|log|round)|[\d.+\-*/%()\s]",
+                prepared)).strip()
+            expr = re.sub(r"\s+", " ", expr)
+            if expr and any(c in expr for c in "+-*/"):
+                try:
+                    val = eval(expr, {"__builtins__": {}}, {"math": math})
+                    result.append(f"  {expr} = {val}")
+                except Exception:
+                    result.append(f"  {expr} = [could not evaluate]")
 
         if any(w in task_lower for w in ["percent", "%", "ratio", "proportion"]):
             result.append("\n📊 PERCENTAGE/RATIO")
@@ -1123,7 +1170,9 @@ class FileGuardianAgent(Agent):
                         "smart backup, cleanup, and structure analysis.",
             specializations=["file", "folder", "directory", "organize", "cleanup",
                               "backup", "structure", "tree", "move", "rename",
-                              "storage", "space", "duplicate"],
+                              "storage", "space", "duplicate", "read file",
+                              "find the file", "find file", "list files",
+                              "create a test file", "file size"],
             tools_allowed=["file_list", "file_read", "file_write", "file_copy",
                            "file_move", "file_delete", "file_mkdir", "file_find"])
 

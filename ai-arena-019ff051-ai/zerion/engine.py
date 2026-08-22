@@ -880,11 +880,21 @@ def profile_mobile_io_latency_and_throughput(payload):
             tracker = self.cognitive_runtime.provider_health
             snap = tracker.snapshot()
             gemini_h = snap.get("gemini")
+            # snapshot() may expose ProviderHealth objects or plain dicts —
+            # read the status from whichever shape it actually is.
+            if gemini_h is None:
+                gemini_status = "UNREGISTERED"
+            elif hasattr(gemini_h, "status"):
+                gemini_status = getattr(gemini_h.status, "value",
+                                        str(gemini_h.status))
+            else:
+                gemini_status = str(
+                    gemini_h.get("status", "UNKNOWN")
+                    if isinstance(gemini_h, dict) else gemini_h)
             out["provider"] = {
                 "name": "gemini",
                 "configured": bool(_os.environ.get("GEMINI_API_KEY", "")),
-                "health": (gemini_h.status.value if gemini_h is not None
-                           else "UNREGISTERED"),
+                "health": gemini_status,
             }
         except Exception as e:  # noqa: BLE001
             out["provider"] = {"status": "UNKNOWN",

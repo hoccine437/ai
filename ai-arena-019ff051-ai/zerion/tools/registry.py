@@ -51,8 +51,11 @@ def _exec_code(a):
     if not a or not a.strip():
         return _err("code_execute", "No code provided")
     ns = {"_out": []}
+    def _safe_print(*args, **kw):  # stringify every arg — never crash on ints
+        sep = kw.get("sep", " ")
+        ns["_out"].append(sep.join(str(x) for x in args))
     safe_builtins = {
-        "print": lambda *args, **kw: ns["_out"].append(" ".join(str(x) for x in args)),
+        "print": _safe_print,
         "range": range, "len": len, "int": int, "float": float,
         "str": str, "list": list, "dict": dict, "set": set, "tuple": tuple,
         "sorted": sorted, "map": map, "filter": filter,
@@ -60,7 +63,7 @@ def _exec_code(a):
         "enumerate": enumerate, "zip": zip, "reversed": reversed,
         "True": True, "False": False, "None": None,
         "isinstance": isinstance, "type": type, "hasattr": hasattr,
-        "getattr": getattr, "print": ns["_out"].append,
+        "getattr": getattr,
     }
     try:
         exec(a, {"__builtins__": safe_builtins}, ns)
@@ -519,12 +522,23 @@ class ToolRegistry:
 
         # ═══════════════ NETWORK (41-50) ═══════════════
         def _net_check(a):
+            # A failed outbound probe is NOT proof of being offline: also
+            # check the local stack before making any claim.
             try:
                 import urllib.request
                 urllib.request.urlopen("https://1.1.1.1", timeout=3)
-                return _ok("net_check", "✅ ONLINE — internet connectivity confirmed")
-            except Exception:
-                return _ok("net_check", "❌ OFFLINE — no internet connectivity")
+                return _ok("net_check", "✅ ONLINE — outbound HTTPS probe reached 1.1.1.1")
+            except Exception as exc:
+                local = "unknown"
+                try:
+                    import socket
+                    local = socket.gethostbyname(socket.gethostname())
+                except Exception:
+                    pass
+                return _ok("net_check",
+                           f"⚠️ OUTBOUND PROBE FAILED ({type(exc).__name__}) — "
+                           f"local stack: {local}. Egress may be firewalled; "
+                           f"this does not prove the device is offline.")
         r("net_check", "network", "Check if internet is available", _net_check)
 
         def _net_dns(a):

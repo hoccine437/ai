@@ -102,8 +102,6 @@ class EventType(str, Enum):
     VOICE_ENDED = "VOICE_ENDED"
     # --- Slice 10: voice + wake-word lifecycle (UI/voice integration) ---
     # Emitted by the voice layer; consumed by the VisualizationStateAdapter.
-    WAKE_WORD_DETECTED = "WAKE_WORD_DETECTED"
-    WAKE_WORD_MISDETECTED = "WAKE_WORD_MISDETECTED"
     VOICE_ERROR = "VOICE_ERROR"
     # A cognitive response is ready for voice output (runtime -> voice layer).
     VOICE_RESPONSE_READY = "VOICE_RESPONSE_READY"
