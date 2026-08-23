@@ -95,7 +95,7 @@ class CognitiveCreditAssigner:
         had_procedural_memory: bool = True,
         had_adversarial_check: bool = True,
         strategy_used: str = "IntervalBisection",
-        model_used: str = "gemini-2.5-flash"
+        model_used: str = "gemini-2.5-flash-lite"
     ) -> CognitiveCreditReport:
         nodes = {}
         if is_success:

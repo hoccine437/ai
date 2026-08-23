@@ -70,8 +70,19 @@ def measure_provider(engine) -> Dict[str, Any]:
     if the Gemini key/config is missing or unusable we report UNAVAILABLE —
     we never silently substitute another inference backend.
     """
+    # Read the ACTUAL model from the engine's provider, not a stale
+    # hardcoded fallback.  The provider.default_model is the source of
+    # truth (set from env or the code default).
+    try:
+        _gp = getattr(engine, "cognitive_runtime", None)
+        _rp = getattr(_gp, "router", None) if _gp else None
+        _prov = getattr(_rp, "_providers", {}).get("gemini", None) if _rp else None
+        _model = getattr(_prov, "_default_model", None) if _prov else None
+    except Exception:  # noqa: BLE001
+        _model = None
     out: Dict[str, Any] = {"provider": "gemini",
-                           "model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+                           "model": _model or os.environ.get(
+                               "GEMINI_MODEL", "gemini-2.5-flash-lite"),
                            "provider_state": "UNAVAILABLE"}
     try:
         key = os.environ.get("GEMINI_API_KEY", "")
