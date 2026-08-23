@@ -1,7 +1,7 @@
 # ZERION_COGNITIVE_BENCHMARK.md
 
-**Run:** `run_5dc91d0a02f0`  
-**Created:** 2026-08-20 14:02:54 UTC  
+**Run:** `run_fe180ffd542b`  
+**Created:** 2026-08-23 01:42:05 UTC  
 **Seed:** 222  
 **Trials per task:** 2  
 **Modes:** BASELINE, ZERION, ABLATION_NO_VERIFICATION  
@@ -180,17 +180,15 @@ This entire run executes offline: deterministic local model, deterministic mock 
 
 | Provider | Status |
 |---|---|
-| deterministic_local | AVAILABLE (used for every trial in this run) |
-| local_gguf | NOT_AVAILABLE (no GGUF models registered in this environment) |
-| openai | NOT_AVAILABLE (no OPENAI_API_KEY configured) |
-| gemini | NOT_AVAILABLE (no GEMINI_API_KEY configured) |
+| gemini | NOT_AVAILABLE (no key configured) |
+| openai | REMOVED - Zerion has no OpenAI integration |
 
 Provider-independence: the benchmark model implements the Slice 6 `ModelProvider` protocol and is registered with the real `CognitiveRouter` in the test suite to prove the benchmark is not bound to one provider. No unavailable provider's results are fabricated (NOT_AVAILABLE is reported instead).
 
 ## REPRODUCIBILITY
 
-- run_id: `run_5dc91d0a02f0`
-- timestamp: 2026-08-20 14:02:54 UTC
+- run_id: `run_fe180ffd542b`
+- timestamp: 2026-08-23 01:42:05 UTC
 - seed: 222
 - trials per task: 2
 - model/profile: {"hallucination_bias": 0.5, "persistence_limit": 2, "guidance_retry_bonus": 2, "trust_first_source": true, "exploration_limit": 2, "guidance_acceptance": 0.9, "max_steps": 40}

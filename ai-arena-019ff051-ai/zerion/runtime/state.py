@@ -82,7 +82,7 @@ def measure_provider(engine) -> Dict[str, Any]:
         _model = None
     out: Dict[str, Any] = {"provider": "gemini",
                            "model": _model or os.environ.get(
-                               "GEMINI_MODEL", "gemini-2.5-flash-lite"),
+                               "GEMINI_MODEL", "gemini-2.5-flash"),
                            "provider_state": "UNAVAILABLE"}
     try:
         key = os.environ.get("GEMINI_API_KEY", "")
