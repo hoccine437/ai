@@ -44,6 +44,14 @@ _MEMORY_STORE_RE = re.compile(
     r"|(?:my\s+(?!name\s+is)(.+?)\s+is\s+)(.+)$"
     r"|(?:(\S+)\s+is\s+my\s+(.+)\s*$)"
     r"|(?:i\s+(?:like|love|hate|prefer|enjoy)\s+)(.+)$"
+    # Explicit learning commands — "learn X" / "study X" / Arabic تعلّم.
+    # Imperative-only (optionally preceded by short imperative lead-ins like
+    # "good now learn ...", "just learn ...") so normal chat is never hijacked.
+    r"|(?:(?:ok|okay|good|great|nice|well|now|then|please|just|and)\s+){0,4}"
+    r"(?:learn\s+)(?!me\b|you\b)(.+)$"
+    r"|(?:(?:ok|okay|good|great|nice|well|now|then|please|just|and)\s+){0,4}"
+    r"(?:study\s+)(.+)$"
+    r"|(?:تعلّم|تعلم)\s*(?:أن|ان|عن)?\s*(.+)$"
     # Arabic / Darija: احفظ / تذكر / سجّل (remember/save), اسمي (my name is)
     r"|(?:احفظ|تذكر|سجّل|سجل)\s*(?:أن|ان|هذا|هذه|ذلك)?\s*[:،,]?\s*(.+)$"
     r"|(?:انا|أنا)?\s*اسمي\s+(.+)$"
@@ -56,7 +64,7 @@ _MEMORY_FORGET_RE = re.compile(
 
 # CORRECTION: "actually X is Y", "no X is Y", "correct X to Y", "I meant Y"
 _MEMORY_CORRECT_RE = re.compile(
-    r"^(?:actually|no[,.]?\s*|wrong[,.]?\s*|correction[,:]\s*|i\s+meant\s+|it'?s\s+(?:actually\s+)?|change\s+(?:it\s+to|to)\s+|replace\s+.+\s+with\s+)(.+)$",
+    r"^(?:actually|no(?![a-z])[,.!]?\s*|wrong(?![a-z])[,.!]?\s*|correction[,:]\s*|i\s+meant\s+|it'?s\s+(?:actually\s+)?|change\s+(?:it\s+to|to)\s+|replace\s+.+\s+with\s+)(.+)$",
     re.IGNORECASE)
 
 _MEMORY_RECALL_RE = re.compile(
@@ -406,6 +414,25 @@ class ZerionToolRouter:
             return resolved or ""
         # Arabic / Darija patterns FIRST (matched on the original text so
         # Arabic names keep their exact spelling).
+        m = re.match(r"^(?:تعلّم|تعلم)\s*(?:أن|ان|عن)?\s*(.+)$", low)
+        if m and m.group(1).strip():
+            rest = m.group(1).strip().rstrip(".?!").strip()
+            if rest.lower() in {"it", "this", "that", "ه", "ها", "هذا",
+                                "هذه", "ذلك"} or not rest:
+                resolved = self._resolve_pronoun("it")
+                return resolved or ""
+            return f"wants to learn: {rest}"
+        m = re.match(
+            r"^(?:(?:ok|okay|good|great|nice|well|now|then|please|just|and)"
+            r"\s+){0,4}(?:learn|study)\s+(?:about\s+)?(.+)$", low,
+            re.IGNORECASE)
+        if m and m.group(1).strip():
+            rest = m.group(1).strip().rstrip(".?!").strip()
+            if rest.lower() in {"it", "this", "that", "them", "those",
+                                "the previous", "what i said"} or not rest:
+                resolved = self._resolve_pronoun("it")
+                return resolved or ""
+            return f"wants to learn: {rest}"
         m = re.match(r"^(?:انا|أنا)?\s*اسمي\s+(.+)$", low)
         if m and m.group(1).strip():
             return f"name: {m.group(1).strip().rstrip('.?!')}"
@@ -471,6 +498,17 @@ class ZerionToolRouter:
                        "detail": fact[:500]}],
             capabilities_used=["memory_store"],
         )
+        # Dedupe: storing an identical fact twice must not pile up copies.
+        fact_norm = " ".join(fact.lower().split())
+        for ep in episode_store.list()[-200:]:
+            ctx = str(getattr(ep, "context", "") or "")
+            if ctx.startswith("knowledge: "):
+                existing = " ".join(
+                    ctx[len("knowledge: "):].strip().lower().split())
+                if existing == fact_norm:
+                    return ToolResult(
+                        ok=True, tool="memory_store",
+                        output=f"Already known: {fact}")
         stored = episode_store.put(episode)
         return ToolResult(
             ok=True, tool="memory_store",
@@ -583,13 +621,14 @@ class ZerionToolRouter:
             # Empty query (e.g. "what do you remember?") — list knowledge.
             query = "knowledge"
         hits: List[str] = []
+        fallback_hits: List[str] = []
         try:
             reuse = getattr(self.runtime, "experience_reuse", None)
             if reuse is not None:
                 for hit in reuse.retrieve(context=query, top_k=5):
                     statement = str(hit.get("statement", "") or "")
                     if statement:
-                        hits.append(statement[:300])
+                        fallback_hits.append(statement[:300])
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -600,7 +639,8 @@ class ZerionToolRouter:
                     context = str(getattr(ep, "context", "") or "")
                     # Extract the knowledge from "knowledge: X" format
                     fact = context
-                    if fact.startswith("knowledge: "):
+                    is_knowledge = fact.startswith("knowledge: ")
+                    if is_knowledge:
                         fact = fact[len("knowledge: "):]
                     ep_words = set(re.findall(r"[a-z0-9_]+", fact.lower()))
                     shared = ep_words & q_words
@@ -609,10 +649,19 @@ class ZerionToolRouter:
                              "that", "this", "of", "for", "was", "has",
                              "have", "can", "with", "from", "not", "but"}
                     meaningful = shared - _STOP
-                    if meaningful:
+                    if not meaningful:
+                        continue
+                    if is_knowledge:
+                        # Clean user facts always come first.
                         hits.append(fact[:300])
+                    else:
+                        # Raw conversation/lesson logs are a last resort —
+                        # never dump them over real knowledge.
+                        fallback_hits.append(fact[:300])
         except Exception:  # noqa: BLE001
             pass
+        if not hits:
+            hits = fallback_hits
         seen = []
         for h in hits:
             if h not in seen:
