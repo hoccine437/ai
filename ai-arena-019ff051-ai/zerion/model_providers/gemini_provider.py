@@ -51,6 +51,51 @@ class GeminiProvider(ModelProvider):
     def is_available(self) -> bool:
         return bool(self.api_key and len(self.api_key) > 10)
 
+    # ── live model discovery ─────────────────────────────────────────────
+
+    def list_available_models(self) -> list:
+        """Query Google's ListModels endpoint for models this key can use.
+        Returns a sorted list of model names supporting generateContent.
+        Cached for 10 minutes; on error the empty result IS the honest
+        answer — never fabricated."""
+        now = time.time()
+        if (getattr(self, "_models_cache", None) is not None
+                and now - getattr(self, "_models_cache_ts", 0) < 600):
+            return self._models_cache
+        url = f"{_GEMINI_BASE}?key={self.api_key}&pageSize=100"
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            names = []
+            for m in data.get("models", []):
+                if "generateContent" in (m.get("supportedGenerationMethods")
+                                          or []):
+                    names.append(str(m.get("name", "")).replace(
+                        "models/", ""))
+            self._models_cache = sorted(set(names))
+            self._models_cache_ts = now
+            return self._models_cache
+        except Exception:  # noqa: BLE001 — honest empty result on failure
+            self._models_cache = []
+            self._models_cache_ts = now
+            return []
+
+    def _resolve_model_404(self, failed_model: str, error: str) -> Optional[str]:
+        """After a model-404, pick a working model from the LIVE list.
+        Preference: any flash variant (fast/cheap), newest-sounding first."""
+        avail = self.list_available_models()
+        if not avail:
+            return None
+        flashes = [m for m in avail
+                   if "flash" in m and "thinking" not in m
+                   and m != failed_model]
+        if flashes:
+            flashes.sort(reverse=True)
+            return flashes[0]
+        others = [m for m in avail if m != failed_model]
+        return others[0] if others else None
+
     async def generate_response(
         self,
         prompt: str,
@@ -88,10 +133,59 @@ class GeminiProvider(ModelProvider):
             latency = (time.perf_counter() - t0) * 1000.0
 
             if result.get("error"):
+                err = str(result["error"])
+                # Model-404 auto-recovery: Google retires models fast.
+                # Query the LIVE model list and retry once with a real,
+                # currently-served model instead of failing the turn.
+                if "HTTP 404" in err:
+                    alt = self._resolve_model_404(target_model, err)
+                    if alt:
+                        retry = await asyncio.to_thread(
+                            self._call_gemini, alt, prompt, context)
+                        if not retry.get("error"):
+                            usage2 = retry.get("usageMetadata", {})
+                            cands = retry.get("candidates", [])
+                            text2 = ""
+                            if cands:
+                                parts = cands[0].get("content", {}).get(
+                                    "parts", [])
+                                text2 = "".join(p.get("text", "") for p
+                                                in parts)
+                            if text2:
+                                self.default_model = alt  # remember what works
+                                return ModelResponse(
+                                    provider_name="gemini",
+                                    model_id=alt,
+                                    content=text2,
+                                    execution_mode=(ExecutionMode.
+                                                    REAL_MODEL_RESPONSE),
+                                    prompt_tokens=usage2.get(
+                                        "promptTokenCount"),
+                                    completion_tokens=usage2.get(
+                                        "candidatesTokenCount"),
+                                    latency_ms=round((time.perf_counter()
+                                                      - t0) * 1000.0, 2),
+                                    cost_cents=None,
+                                    is_fallback=False)
+                        avail_note = self.list_available_models()
+                        hint = (" Available models: "
+                                + ", ".join(avail_note[:8])) if avail_note \
+                            else ""
+                        return ModelResponse(
+                            provider_name="gemini",
+                            model_id=target_model,
+                            content=f"[FALLBACK] Gemini model '{target_model}' "
+                                    f"is unavailable (404). Auto-retry with "
+                                    f"'{alt}' also failed.{hint}",
+                            execution_mode=ExecutionMode.FALLBACK_RESPONSE,
+                            prompt_tokens=None, completion_tokens=None,
+                            latency_ms=round((time.perf_counter() - t0)
+                                             * 1000.0, 2),
+                            cost_cents=None, is_fallback=True)
                 return ModelResponse(
                     provider_name="gemini",
                     model_id=target_model,
-                    content=f"[FALLBACK] Gemini API error: {result['error']}",
+                    content=f"[FALLBACK] Gemini API error: {err}",
                     execution_mode=ExecutionMode.FALLBACK_RESPONSE,
                     prompt_tokens=None,
                     completion_tokens=None,
