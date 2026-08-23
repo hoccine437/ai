@@ -177,6 +177,43 @@ class ZerionRuntimeContext:
             pass
         return items[:16]
 
+    def _recent_history(self, user_text: str) -> List[str]:
+        """Recent conversation turns (persisted episodes) so Gemini can see
+        what was actually said before — fixes references like "like you
+        said" / "مثل ما قلت" and gives continuity across restarts."""
+        lines: List[str] = []
+        try:
+            episodes = getattr(self.runtime, "episode_store", None)
+            if episodes is None:
+                return lines
+            import re as _re
+            for ep in episodes.list()[-24:]:
+                ctx = str(getattr(ep, "context", "") or "")
+                if not ctx.startswith("user message:"):
+                    continue  # skip knowledge facts (already in memory)
+                user_msg = ctx[len("user message:"):].strip()
+                if not user_msg:
+                    continue
+                # Skip the current turn itself (it is the live prompt).
+                if user_msg[:120].lower() == (user_text or "")[:120].lower():
+                    continue
+                reply = ""
+                try:
+                    outcomes = getattr(ep, "outcomes", None) or []
+                    for oc in outcomes:
+                        detail = str(oc.get("detail", "") or "")
+                        if detail:
+                            reply = detail
+                            break
+                except Exception:  # noqa: BLE001
+                    pass
+                lines.append(f"user: {user_msg[:200]}")
+                if reply:
+                    lines.append(f"you: {reply[:300]}")
+        except Exception:  # noqa: BLE001
+            pass
+        return lines[-10:]
+
     def _user_learning(self) -> List[str]:
         try:
             store = getattr(self.runtime, "user_learning", None)
@@ -254,6 +291,13 @@ class ZerionRuntimeContext:
         memory = self._memory(user_text)
         if memory:
             sections.append("Relevant memory:\n" + "\n".join(memory))
+
+        history = self._recent_history(user_text)
+        if history:
+            sections.append(
+                "Recent conversation (for context — you may reference it "
+                "when the user says 'like I said' etc.):\n"
+                + "\n".join(history))
 
         learning = self._user_learning()
         if learning:

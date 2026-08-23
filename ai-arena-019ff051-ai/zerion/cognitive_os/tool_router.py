@@ -30,56 +30,24 @@ _TOOL_CALL_RE = re.compile(
     re.IGNORECASE | re.DOTALL)
 
 _MEMORY_STORE_RE = re.compile(
+    # ONLY intentional fact statements. Normal conversation ("X can Y",
+    # "X has Y", "the X is Y", "explain X"...) must NEVER be hijacked into
+    # memory writes — it belongs to Gemini.
     r"^(?:(?:please\s+)?(?:remember|memorize|note that|store this|save that)"
     r"[\s:,]+(.+)$"
-    r"|(?:my\s+(?:name\s+is|name\s*=)\s+)(.+)$"
+    r"|(?:my\s+name\s+is\s+)(.+)$"
+    r"|(?:i\s+am\s+called\s+)(.+)$"
     r"|(?:call\s+me\s+)(.+)$"
-    r"|(?:i\s+am\s+)(\S+)\s+(?:re\w*|mem\w*|note|save|store|pls|plz).*$"
     r"|(?:my\s+name\s+is\s+)(.+?)\s+(?:remember|note|save|store)"
     r"|(?:remember\s+that\s+)(.+)$"
-    r"|(?:remember\s+)(?!to\b)(.+)$"
-    r"|(?:my\s+name\s+is\s+)(.+?)\s*,?\s*$)"
-    r"|(?:(\w+)\s+is\s+my\s+(\w+)\s*$)"
+    r"|(?:remember\s+)(?!to\b|that\b|me\b|when\b|how\b|what\b|why\b|where\b|who\b)(.+)$"
     r"|(?:my\s+(?!name\s+is)(.+?)\s+is\s+)(.+)$"
-    r"|(?:i\s+(?:like|love|hate|prefer|enjoy|want|need)\s+)(.+)$"
-    r"|(?:the\s+(.+?)\s+is\s+)(.+)$"
-    r"|(?:(\w+)\s+is\s+)(?!my\b)(.+)$"
-    r"|(?:(\w+)\s+uses\s+)(.+)$"
-    r"|(?:(\w+)\s+does\s+)(.+)$"
-    r"|(?:(\w+)\s+can\s+)(.+)$"
-    r"|(?:(\w+)\s+controls\s+)(.+)$"
-    r"|(?:(\w+)\s+runs\s+)(.+)$"
-    r"|(?:(\w+)\s+means\s+)(.+)$"
-    r"|(?:(\w+)\s+has\s+)(.+)$"
-    r"|(?:(\w+)\s+stands\s+for\s+)(.+)$"
-    r"|(?:(\w+)\s+called\s+)(.+)$"
-    r"|(?:\w+\s+\w+\s+is\s+)(?!my\b)(.+)$"
-    r"|(?:\S+\s+is\s+a\s+)(.+)$"
-    r"|(?:\S+\s+is\s+an\s+)(.+)$"
-    r"|(?:\w+\s+\w+\s+are\s+)(?!you)(.+)$"
-    r"|(?:\w+\s+\w+\s+have\s+)(.+)$"
-    r"|(?:\w+\s+\w+\s+use\s+)(.+)$"
-    r"|(?:\w+\s+\w+\s+means\s+)(.+)$"
-    r"|(?:\w+\s+\w+\s+means\s+that\s+)(.+)$"
-    r"|(?:\w+\s+\w+\s+supports\s+)(.+)$"
-    r"|(?:\w+\s+\w+\s+implements\s+)(.+)$"
-    r"|(?:\w+\s+\w+\s+follows\s+)(.+)$"
-    r"|(?:\S+\s+\+\+\s+is\s+)(?!my\b)(.+)$"
     r"|(?:(\S+)\s+is\s+my\s+(.+)\s*$)"
-    r"|(?:I\s+learned\s+that\s+)(.+)$"
-    r"|(?:learn\s+)(.+)$"
-    r"|(?:study\s+)(.+)$"
-    r"|(?:understand\s+)(.+)$"
-    r"|(?:classify\s+by\s+)(.+)$"
-    r"|(?:the\s+user\s+thinks\s+)(.+)$"
-    r"|(?:\w+\s+\w+\s+use\s+)(.+)$"
-    r"|(?:\w+\s+supports\s+)(.+)$"
-    r"|(?:\w+\s+are\s+)(?!you)(.+)$"
-    r"|(?:\w+\s+means\s+that\s+)(.+)$"
-    r"|(?:\w+\s+have\s+)(.+)$"
-    r"|(?:\w+\s+use\s+)(.+)$"
-    r"|(?:\w+\s+implement\s+)(.+)$"
-    r"|(?:\w+\s+follow\s+)(.+)$", re.IGNORECASE)
+    r"|(?:i\s+(?:like|love|hate|prefer|enjoy)\s+)(.+)$"
+    # Arabic / Darija: احفظ / تذكر / سجّل (remember/save), اسمي (my name is)
+    r"|(?:احفظ|تذكر|سجّل|سجل)\s*(?:أن|ان|هذا|هذه|ذلك)?\s*[:،,]?\s*(.+)$"
+    r"|(?:انا|أنا)?\s*اسمي\s+(.+)$"
+    ")", re.IGNORECASE | re.UNICODE)
 
 # FORGET: "forget X", "remove X", "delete X", "clear X"
 _MEMORY_FORGET_RE = re.compile(
@@ -92,27 +60,21 @@ _MEMORY_CORRECT_RE = re.compile(
     re.IGNORECASE)
 
 _MEMORY_RECALL_RE = re.compile(
-    r"^(?:what do you remember about|recall|what do you know about|"
-    r"what did i (?:ask|say|tell you) about|search memory for|"
-    r"what is my name|whats? my name|do you remember me|"
-    r"what did i tell you about|what did i teach you|what did i learn you|do you know who i am|"
-    r"do you know my name|tell me my name|"
-    r"do you remember my name|what.s my name|what is my (\w+)|what.s my (\w+)|do i (?:like|love|hate|prefer|enjoy|want|need) (\w+)|tell me about my (.+)|what do i (?:like|love|hate|prefer|enjoy|want|need)|"
-    r"what does (\w+) (?:do|mean|stand for)\??|"
-    r"what (\w+) is (\w+)\??|"
-    r"how (?:do you |to |can you )?(.+?)\??|"
-    r"where (?:does|do|is|are|can) (.+?)\??|"
-    r"when (?:does|do|is|are|was|were) (.+?)\??|"
-    r"why (?:does|do|is|are|was|were) (.+?)\??|"
-    r"explain (.+)|"
-    r"describe (.+)|"
-    r"teach me (.+)|"
-    r"what have i (?:taught|told|shared|learned)|what did you learn|what do you know|what have you learned|tell me what you know|"
-    r"how does (\w+) work\??|"
-    r"how do (\w+) work\??|"
-    r"can you (?:explain|teach|tell me about) (.+?)\??|"
-    r"what (.+?) does (\w+) use\??"
-    r")[\s:,]*(.*)$", re.IGNORECASE)
+    # Only genuine recall intents. Questions like "how does X work",
+    # "explain X", "where/why/when ..." are CONVERSATION for Gemini — they
+    # must never be intercepted as memory lookups.
+    r"^(?:what do you remember about|recall|search memory for|"
+    r"what did i (?:ask|say|tell you|teach you) about|"
+    r"what is my name|whats? my name|what.s my name|do you remember me|"
+    r"do you know who i am|do you know my name|tell me my name|"
+    r"who am i\??|من أنا|من انا|مين انا|واش اسمي|واش سميتي|شو اسمي|شنو اسمي|ما اسمي|ماذا تعرف عني|هل تذكرني"
+    r"|"
+    r"what is my (.+)|what.s my (.+)|whats my (.+)|"
+    r"do i (?:like|love|hate|prefer|enjoy) (.+)|"
+    r"tell me about my (.+)|what do i (?:like|love|hate|prefer|enjoy)|"
+    r"what have i (?:taught|told|shared|learned)|what did you learn|"
+    r"what do you know about me|what do you remember|tell me what you know"
+    r")[\s:?!,]*(.*)$", re.IGNORECASE | re.UNICODE)
 
 
 class ToolResult:
@@ -433,13 +395,25 @@ class ZerionToolRouter:
         m = self._IMPERATIVE_RE.match(low)
         if m and m.group(1).strip():
             low = m.group(1).strip().rstrip(".?!").strip()
-        low_l = low.lower().rstrip(".?! ").strip()
+        low_l = low.lower().rstrip(".?! \u060c").strip()
         if low_l in {"it", "this", "that", "them", "those", "the previous",
                      "the last thing", "what i said", "my nickname",
-                     "remember it", "save it", "don't forget it"} or \
+                     "remember it", "save it", "don't forget it",
+                     # Arabic/Darija references: ه/ها/هم (it/them), ذلك، هذا
+                     "ه", "هـ", "ها", "هم", "هذا", "هذه", "ذلك"} or \
                 low_l.endswith(" remember it") or low_l == "":
             resolved = self._resolve_pronoun(low_l or "it")
             return resolved or ""
+        # Arabic / Darija patterns FIRST (matched on the original text so
+        # Arabic names keep their exact spelling).
+        m = re.match(r"^(?:انا|أنا)?\s*اسمي\s+(.+)$", low)
+        if m and m.group(1).strip():
+            return f"name: {m.group(1).strip().rstrip('.?!')}"
+        m = re.match(
+            r"^(?:احفظ|تذكر|سجّل|سجل)\s*(?:أن|ان)?\s*[:،,]?\s*(.+)$", low)
+        if m and m.group(1).strip():
+            rest = m.group(1).strip().rstrip(".?!").strip()
+            return self._parse_user_fact(rest) or rest
         # Case-preserving semantic patterns (matched on the ORIGINAL text so
         # values like "NEXUS" or "nano808" keep their casing).
         m = re.match(r"^(?:my\s+name\s+is|i\s+am\s+called|call\s+me)\s+(.+)$",
@@ -557,6 +531,23 @@ class ZerionToolRouter:
         raw = (arg or "").strip()
         query = raw.rstrip("?!.,;:")
         qlow = query.lower().strip()
+
+        # Personal identity recall: "who am i" / "do you know who i am" /
+        # Arabic "واش اسمي", "من انا", "ما اسمي" ... -> look up the name key.
+        if re.search(
+                r"(?:\bwho am i\b|\bdo you (?:know|remember)\s+(?:who i am"
+                r"|my name|me)\b|\btell me my name\b"
+                r"|من أنا|من انا|مين انا|مين أنا|واش اسمي|واش سميتي"
+                r"|شو اسمي|شنو اسمي|ما اسمي|هل تذكرني)", qlow):
+            val = self._lookup_key("name")
+            if val:
+                return ToolResult(
+                    ok=True, tool="memory_recall",
+                    output=f"You told me your name is {val}.")
+            return ToolResult(
+                ok=True, tool="memory_recall",
+                output=("I don't know your name yet — tell me and "
+                        "I'll remember it."))
 
         # Personal key lookup: "what is my nickname" -> "Your nickname is X."
         key_m = re.match(
