@@ -229,11 +229,20 @@ class ZerionUI:
                     result = await runtime_core.execute_task(
                         task, message, mode=RoutingMode.AUTO)
                     output = getattr(result, "output", None)
-                    reply = output or f"[{getattr(result.status, 'value', 'ERROR')}] No response generated."
+                    if output:
+                        reply = output
+                    else:
+                        # Surface the ACTUAL error so the user can diagnose
+                        # (before this, errors were silently discarded).
+                        errs = getattr(result, "errors", None) or []
+                        detail = errs[0] if errs else "No response generated."
+                        reply = (f"[{getattr(result.status, 'value', 'ERROR')}] "
+                                 f"{detail}")
                     md = getattr(result, "metadata", {}) or {}
                     res = {"reply": reply,
                            "status": getattr(result.status, "value", "ERROR"),
                            "provider": getattr(result, "provider", ""),
+                           "errors": getattr(result, "errors", []),
                            "trace": md.get("trace"),
                            "agent_used": md.get("agent_used"),
                            "tool_used": md.get("tool_used"),
