@@ -195,7 +195,14 @@ class ZerionToolRouter:
         if _MEMORY_RECALL_RE.match(low):
             return "memory_recall"
         # Contextual recall: "what preference did I ask you to remember?"
-        if re.search(r"\bwhat\b.*\b(remember|told|tell|said|ask)\b", low):
+        if re.search(r"\bwhat\b.*\b(remember|told|said|ask)\b", low):
+            return "memory_recall"
+        # "tell me what u learn(ed) about X", "show me what you know about Y"
+        if re.search(r"\b(tell|show)\b(?:\s+\w+){0,3}\s+what\b"
+                     r".*\b(learn|learned|learnt|know)\b", low):
+            return "memory_recall"
+        # "what did I ask you to learn?"
+        if re.search(r"\bwhat\b.*\b(?:did|do)\s+i\b.*\blearn\b", low):
             return "memory_recall"
         # Specific tool checks BEFORE broad store patterns — prevents
         # 'what can you do?' from matching the broad 'X can Y' store pattern
@@ -403,13 +410,22 @@ class ZerionToolRouter:
         m = self._IMPERATIVE_RE.match(low)
         if m and m.group(1).strip():
             low = m.group(1).strip().rstrip(".?!").strip()
+        # Strip a trailing imperative tail FIRST: "my name is nono888
+        # remember it" -> parse "my name is nono888" (the tail must never
+        # discard the fact it follows).
+        stripped = re.sub(
+            r"[\s,.]*\b(?:remember|save|store|memorize)\s+"
+            r"(?:it|this|that|them|all)\b[\s.!]*$",
+            "", low, flags=re.IGNORECASE).strip()
+        if stripped:
+            low = stripped
         low_l = low.lower().rstrip(".?! \u060c").strip()
         if low_l in {"it", "this", "that", "them", "those", "the previous",
                      "the last thing", "what i said", "my nickname",
                      "remember it", "save it", "don't forget it",
                      # Arabic/Darija references: ه/ها/هم (it/them), ذلك، هذا
                      "ه", "هـ", "ها", "هم", "هذا", "هذه", "ذلك"} or \
-                low_l.endswith(" remember it") or low_l == "":
+                low_l == "":
             resolved = self._resolve_pronoun(low_l or "it")
             return resolved or ""
         # Arabic / Darija patterns FIRST (matched on the original text so
@@ -469,6 +485,16 @@ class ZerionToolRouter:
             return ToolResult(ok=False, tool="memory_store", output="",
                               error="nothing to remember — the reference "
                                     "could not be resolved to a concrete fact")
+        # Sanity guard: never store bare interjections / filler words
+        # ("huh", "what", "ok"...) as knowledge.
+        _INTERJECTIONS = {"huh", "what", "wat", "ok", "okay", "yes", "no",
+                          "why", "lol", "hm", "hmm", "hmmm", "wow", "hey",
+                          "hi", "hello", "thanks", "thank you", "please"}
+        if " " not in fact.strip() and \
+                fact.strip(".?!").strip().lower() in _INTERJECTIONS:
+            return ToolResult(
+                ok=False, tool="memory_store", output="",
+                error=f"refusing to store \"{fact}\" — not a memorable fact")
         episode_store = getattr(self.runtime, "episode_store", None)
         if episode_store is None:
             return ToolResult(ok=False, tool="memory_store", output="",
