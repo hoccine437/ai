@@ -1,0 +1,16 @@
+{
+  "name": "zerion-x-ai",
+  "private": true,
+  "version": "1.0.0",
+  "description": "ZERION-X developmental cognitive runtime (Python) — install/preview/build scripts for the Freebuff UI",
+  "scripts": {
+    "install": "cd ai-arena-019ff051-ai && python3 -m pip install -q -r requirements.txt || echo \"WARN: optional provider deps unavailable; the core runtime is pure stdlib and will still run\"",
+    "start": "cd ai-arena-019ff051-ai && sh start.sh",
+    "dev": "cd ai-arena-019ff051-ai && sh start.sh",
+    "ui": "cd ai-arena-019ff051-ai && python3 main.py --ui",
+    "backend": "cd ai-arena-019ff051-ai && python3 main.py --ui --port 8080",
+    "build": "cd ai-arena-019ff051-ai && python3 -m compileall -q zerion && echo \"Python package compiles cleanly; no build artifact needed for preview\"",
+    "test": "cd ai-arena-019ff051-ai && python3 -m unittest discover -s tests -p \"test_*.py\"",
+    "benchmark": "cd ai-arena-019ff051-ai && python3 main.py --cognitive-benchmark"
+  }
+}
