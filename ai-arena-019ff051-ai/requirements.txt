@@ -1,0 +1,13 @@
+# ZERION — Gemini-first intelligence runtime
+#
+# The core runtime is pure Python 3.9+ standard library: it needs NO
+# third-party packages to boot. Gemini (google-generativeai REST via httpx)
+# is the ONLY provider — there is no local GGUF model, no llama.cpp, no
+# OpenAI, no microphone/audio input anywhere in Zerion.
+#
+# Install options:
+#   pip install -r requirements.txt          # core only (zero deps)
+#   pip install -r requirements.txt[online]  # + Gemini HTTP transport (httpx)
+
+# --- Gemini HTTP transport (optional but recommended) ---
+# httpx==0.28.1
